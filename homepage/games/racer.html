@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Vroom!</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#8ed4f2}
+canvas{display:block;touch-action:none}
+a.home{position:fixed;top:10px;left:10px;width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;font-size:24px;text-decoration:none;z-index:9}
+#stars{position:fixed;top:18px;right:16px;color:#fff;font-weight:800;font-size:1.4rem;text-shadow:0 2px 4px rgba(0,0,0,.35);z-index:9}
+.btn{position:fixed;bottom:calc(20px + env(safe-area-inset-bottom));border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 7px 0 rgba(0,0,0,.3);z-index:9;touch-action:none}
+.btn:active{transform:translateY(4px);box-shadow:0 3px 0 rgba(0,0,0,.3)}
+#gas{right:22px;width:110px;height:110px;background:radial-gradient(circle at 35% 30%,#7ed46a,#3f9e2f);font-size:3.2rem}
+#horn{left:22px;width:88px;height:88px;background:radial-gradient(circle at 35% 30%,#ffe08a,#e8a91f);font-size:2.6rem}
+</style>
+</head>
+<body>
+<a class="home" href="index.html">🏠</a>
+<div id="stars">⭐ 0</div>
+<canvas id="c"></canvas>
+<div class="btn" id="horn">📯</div>
+<div class="btn" id="gas">💨</div>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+
+var eng=null;
+function engine(){
+  if(eng)return;
+  try{
+    var a=A(),o=a.createOscillator(),f=a.createBiquadFilter(),g=a.createGain();
+    o.type='sawtooth';f.type='lowpass';f.frequency.value=350;g.gain.value=0;
+    o.connect(f);f.connect(g);g.connect(a.destination);o.start();
+    eng={o:o,g:g};
+  }catch(e){}
+}
+
+var c=document.getElementById('c'),x=c.getContext('2d'),W,H;
+function rs(){W=c.width=innerWidth;H=c.height=innerHeight}
+rs();addEventListener('resize',rs);
+
+var FAR=['⛰️','🌲','🏔️'],NEAR=['🌳','🏠','🐄','🌻','🚏','🌵','🛖','🐑'];
+function makeLayer(list,n){
+  var arr=[];
+  for(var i=0;i<n;i++)arr.push({e:list[Math.random()*list.length|0],x:Math.random()*W*1.5});
+  return arr;
+}
+var far=makeLayer(FAR,5),near=makeLayer(NEAR,6),puffs=[];
+var speed=0,gas=false,dist=0,nextStar=400,stars=0,t=0;
+var starsEl=document.getElementById('stars');
+
+var gasBtn=document.getElementById('gas');
+gasBtn.addEventListener('pointerdown',function(e){A();engine();gasBtn.setPointerCapture(e.pointerId);gas=true});
+['pointerup','pointercancel'].forEach(function(ev){gasBtn.addEventListener(ev,function(){gas=false})});
+
+document.getElementById('horn').addEventListener('pointerdown',function(){
+  A();engine();
+  tone(440,.4,'square',.2);tone(554,.4,'square',.2);
+});
+
+function draw(){
+  t++;
+  speed=Math.max(0,Math.min(12,speed+(gas?.16:-.09)));
+  dist+=speed;
+  if(dist>=nextStar){
+    nextStar+=400;stars++;starsEl.textContent='⭐ '+stars;
+    tone(880,.15,'sine',.3,1320);tone(1320,.2,'sine',.25,0,.12);
+  }
+  if(eng){
+    eng.o.frequency.value=55+speed*16;
+    eng.g.gain.value=speed>.2?.05+speed*.007:0;
+  }
+  var roadY=H*.62,roadH=H*.24;
+  var sky=x.createLinearGradient(0,0,0,roadY);
+  sky.addColorStop(0,'#8ed4f2');sky.addColorStop(1,'#cfeef7');
+  x.fillStyle=sky;x.fillRect(0,0,W,roadY);
+  x.font='52px sans-serif';x.fillText('☀️',W-90,70);
+  x.fillStyle='#a8d97c';x.fillRect(0,roadY-30,W,30);
+  x.textBaseline='alphabetic';
+  x.font=Math.round(H*.06)+'px sans-serif';
+  far.forEach(function(o){
+    o.x-=speed*.7;if(o.x<-80){o.x=W+80;o.e=FAR[Math.random()*FAR.length|0]}
+    x.fillText(o.e,o.x,roadY-24);
+  });
+  x.fillStyle='#5f9e2f';x.fillRect(0,roadY+roadH,W,H-roadY-roadH);
+  x.fillStyle='#555b63';x.fillRect(0,roadY,W,roadH);
+  x.fillStyle='#f7f7f7';
+  var dash=90,off=(dist*2.4)%dash;
+  for(var dx=-off;dx<W;dx+=dash)x.fillRect(dx,roadY+roadH/2-4,46,8);
+  var carSize=Math.min(H*.13,110);
+  puffs.forEach(function(p,i){
+    p.x-=speed*1.5+1;p.y-=.4;p.l-=.02;p.r+=.4;
+    if(p.l<=0)puffs.splice(i,1);
+    else{x.globalAlpha=p.l;x.fillStyle='#d7d7d7';
+      x.beginPath();x.arc(p.x,p.y,p.r,0,6.283);x.fill();x.globalAlpha=1;}
+  });
+  var carX=W*.3,carY=roadY+roadH*.5+Math.sin(t*.25)*speed*.5;
+  if(gas&&t%5===0)puffs.push({x:carX-carSize*.62,y:carY,r:5,l:.7});
+  x.save();x.translate(carX,carY);x.scale(-1,1);
+  x.font=carSize+'px sans-serif';x.textAlign='center';x.textBaseline='middle';
+  x.fillText('🚗',0,0);x.restore();
+  x.textAlign='left';x.textBaseline='alphabetic';
+  x.font=Math.round(H*.09)+'px sans-serif';
+  near.forEach(function(o){
+    o.x-=speed*2.2;
+    if(o.x<-120){o.x=W+120+Math.random()*200;o.e=NEAR[Math.random()*NEAR.length|0]}
+    x.fillText(o.e,o.x,roadY+roadH+H*.09);
+  });
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>

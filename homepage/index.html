@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road Trip Media</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; gap:1.5rem;
+         font-family: system-ui, sans-serif; background:#0f1320; color:#fff; padding:2rem; }
+  h1 { font-size:1.6rem; opacity:.85; margin:0 0 .5rem; }
+  .grid { display:grid; gap:1.25rem; width:100%; max-width:480px; }
+  a.card { display:flex; align-items:center; gap:1rem; text-decoration:none;
+           padding:1.4rem 1.6rem; border-radius:1rem; color:#fff;
+           font-size:1.35rem; font-weight:600; transition:transform .08s ease; }
+  a.card:active { transform:scale(.97); }
+  
+  .video { background:#5a4fff; } .books { background:#1f8f6f; } .music { background:#c2563b; } .games { background:#8e44ad; }
+  .emoji { font-size:1.8rem; }
+  
+  /* --- car-speaker player panel --- */
+  .player { width:100%; max-width:480px; background:#171c2e; border-radius:1rem;
+            padding:1.2rem 1.4rem; box-sizing:border-box; }
+  .now { font-size:1.05rem; opacity:.85; margin-bottom:.9rem; text-align:center;
+         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .controls { display:flex; gap:.6rem; justify-content:center; }
+  .controls button { flex:1; font-size:1.6rem; padding:.7rem 0; border:none;
+            border-radius:.8rem; background:#2a3252; color:#fff; cursor:pointer;
+            transition:transform .08s ease; }
+  .controls button:active { transform:scale(.93); }
+  
+  /* --- subtle top-left power button --- */
+  .power-subtle { position: fixed; top: 1rem; left: 1rem; background: none;
+                  border: none; color: #fff; opacity: 0.25; font-size: 1.4rem;
+                  cursor: pointer; padding: 0.5rem; transition: opacity 0.2s ease;
+                  z-index: 10; -webkit-tap-highlight-color: transparent; }
+  .power-subtle:hover, .power-subtle:active { opacity: 0.7; }
+
+  /* --- overlays & verification dialog --- */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.75);
+             display:flex; align-items:center; justify-content:center; padding:1.5rem; z-index: 100; }
+  .overlay[hidden] { display:none; }
+  .dialog { background:#1a1f30; border-radius:1rem; padding:1.75rem;
+            max-width:400px; width:100%; box-sizing:border-box;
+            box-shadow:0 20px 60px rgba(0,0,0,.5); border: 1px solid #2a3252; }
+  .dialog h2 { margin:0 0 .75rem; font-size:1.3rem; text-align:center; }
+  .dialog p  { margin:0 0 1.25rem; opacity:.8; line-height:1.45; text-align:center; }
+  
+  .gate-input { width: 100%; padding: 0.8rem; border-radius: 0.7rem; border: 1px solid #3a4160;
+                background: #0f1320; color: #fff; font-size: 1.3rem; text-align: center;
+                box-sizing: border-box; margin-bottom: 1.5rem; font-family: inherit; }
+  .gate-input:focus { outline: none; border-color: #5a4fff; }
+
+  .row { display:flex; gap:.75rem; }
+  .btn { flex:1; padding:1rem; border:none; border-radius:.7rem;
+         font-size:1.1rem; font-weight:600; cursor:pointer;
+         font-family:inherit; color:#fff; }
+  .cancel  { background:#33384d; }
+  .confirm { background:#c0392b; }
+  
+  /* --- error message styling --- */
+  .error-text { color: #e74c3c; margin: 1rem 0 0 0; text-align: center; 
+                min-height: 1.45rem; font-weight: 600; font-size: 1.05rem; }
+</style>
+</head>
+<body>
+
+  <button class="power-subtle" id="powerBtn" title="System Settings">⏻</button>
+
+  <h1>What do you want to do?</h1>
+  <div class="grid">
+    <a class="card video" href="http://media.lan:8096" 
+       onclick="openMedia(event, 'jellyfin://', 'http://media.lan:8096')">
+       <span class="emoji">🎬</span> Watch (Jellyfin)
+    </a>
+
+    <a class="card books" href="http://media.lan:13378"
+	   onclick="openMedia(event, 'audiobookshelf', this.href)">
+       <span class="emoji">🎧</span> Audiobooks
+    </a>
+
+    <a class="card music" href="http://media.lan:4533" 
+       onclick="openMedia(event, 'symfonium://', 'http://media.lan:4533')">
+       <span class="emoji">🎵</span> Music
+    </a>
+    
+    <a class="card games" href="/games/"><span class="emoji">🎮</span> Games</a>
+  </div>
+  
+  <div class="player">
+    <div id="now" class="now">…</div>
+    <div class="controls">
+      <button title="Previous"     onclick="cmd('prev')">⏮</button>
+      <button title="Play / Pause" onclick="cmd('toggle')">⏯</button>
+      <button title="Next"         onclick="cmd('next')">⏭</button>
+      <button title="Quieter"      onclick="cmd('voldown')">🔉</button>
+      <button title="Louder"       onclick="cmd('volup')">🔊</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="confirmOverlay" hidden>
+    <div class="dialog">
+      <h2>Adult Verification Required</h2>
+      <p id="gatePrompt">Please solve the problem to unlock power controls:</p>
+      <input type="number" id="gateAnswer" class="gate-input" placeholder="Answer" pattern="[0-9]*" inputmode="numeric">
+      <div class="row">
+        <button class="btn cancel"  id="cancelBtn">Cancel</button>
+        <button class="btn confirm" id="confirmBtn">Shut down</button>
+      </div>
+      <div id="gateError" class="error-text"></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="byeOverlay" hidden>
+    <div class="dialog">
+      <h2 id="byeTitle">Shutting down…</h2>
+      <p id="byeText">Wait for the Pi's green light to stop blinking (about 20 seconds), then it's safe to unplug.</p>
+    </div>
+  </div>
+
+  <script>
+    const API = `http://${location.hostname}:8088`;
+    const now = document.getElementById("now");
+    function render(s){
+      if (!s || !s.now){ now.textContent = "Nothing playing"; return; }
+      now.textContent = (s.state === "paused" ? "⏸ " : "♪ ") + s.now;
+    }
+    async function cmd(c){
+      try { render(await (await fetch(`${API}/${c}`)).json()); }
+      catch(e){ now.textContent = "(music control offline)"; }
+    }
+    async function poll(){
+      try { render(await (await fetch(`${API}/status`)).json()); }
+      catch(e){ now.textContent = "(music control offline)"; }
+    }
+    poll(); setInterval(poll, 5000);
+
+    const SHUTDOWN_URL = `http://${location.hostname}:8097/shutdown`;
+    const $ = id => document.getElementById(id);
+    
+    let expectedAnswer = 0;
+
+    function generateGateChallenge() {
+      const num1 = Math.floor(Math.random() * 15) + 11;
+      const num2 = Math.floor(Math.random() * 15) + 11;
+      expectedAnswer = num1 + num2;
+      $('gatePrompt').textContent = `Prove you are an adult: What is ${num1} + ${num2}?`;
+      $('gateAnswer').value = '';
+      $('gateError').textContent = ''; 
+    }
+    
+    $('powerBtn').onclick = () => {
+      generateGateChallenge();
+      $('confirmOverlay').hidden = false;
+      setTimeout(() => $('gateAnswer').focus(), 50);
+    };
+
+    $('cancelBtn').onclick = () => $('confirmOverlay').hidden = true;
+    
+    $('confirmOverlay').addEventListener('click', e => {
+      if (e.target === $('confirmOverlay')) $('confirmOverlay').hidden = true;
+    });
+
+    $('confirmBtn').onclick = async () => {
+      const userAnswer = parseInt($('gateAnswer').value, 10);
+      
+      if (userAnswer !== expectedAnswer) {
+        $('gateError').textContent = "Incorrect answer. Try again.";
+        $('gateAnswer').value = '';
+        $('gateAnswer').focus();
+        return;
+      }
+
+      $('confirmOverlay').hidden = true;
+      $('byeOverlay').hidden = false;
+      try {
+        const r = await fetch(SHUTDOWN_URL, { method: 'POST' });
+        if (!r.ok) throw new Error(r.status);
+      } catch (e) {
+        $('byeTitle').textContent = "Couldn't reach the media box";
+        $('byeText').textContent  = "The shutdown service may not be running. Close this and try again, or shut down over SSH.";
+      }
+    };
+
+    // --- App / Web Fallback Logic (Moved inside the script tags properly) ---
+    function openMedia(event, scheme, webUrl) {
+	  event.preventDefault();
+	  let timer = null;
+
+	  function cleanup() {
+		clearTimeout(timer);
+		document.removeEventListener('visibilitychange', onHide);
+		window.removeEventListener('pagehide', cleanup);
+	  }
+	  function goWeb() { cleanup(); window.location.href = webUrl; }
+	  function onHide() { if (document.hidden) cleanup(); }  // app took over
+
+	  document.addEventListener('visibilitychange', onHide);
+	  window.addEventListener('pagehide', cleanup);
+	  timer = setTimeout(goWeb, 1500);          // still visible after 1.5s = no app
+
+	  if (!scheme) { goWeb(); return; }
+
+	  if (/android/i.test(navigator.userAgent)) {
+		window.location.href =
+		  'intent://open/#Intent;scheme=' + scheme +
+		  ';S.browser_fallback_url=' + encodeURIComponent(webUrl) + ';end';
+	  } else {
+		window.location.href = scheme + '://';
+	  }
+	}
+  </script>
+</body>
+</html>

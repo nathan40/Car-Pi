@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Memory</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#134e4a}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:10px;z-index:9}
+a.home,.lvl{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:24px;text-decoration:none;border:3px solid transparent}
+.lvl.sel{border-color:#fff;background:rgba(255,255,255,.32)}
+#board{height:100%;padding:76px 12px 16px;display:grid;gap:10px;max-width:760px;margin:0 auto}
+.card{perspective:700px;cursor:pointer}
+.inner{position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform .35s}
+.card.flip .inner{transform:rotateY(180deg)}
+.face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;display:flex;align-items:center;justify-content:center;border-radius:16px;font-size:clamp(1.8rem,9vmin,3.6rem)}
+.front{background:linear-gradient(135deg,#2dd4bf,#0d9488);box-shadow:0 4px 0 rgba(0,0,0,.25)}
+.front::after{content:'❓';font-size:.7em;opacity:.85}
+.back{transform:rotateY(180deg);background:#fdf6ec;box-shadow:0 4px 0 rgba(0,0,0,.25)}
+.card.matched .back{background:#fef3c7;box-shadow:0 0 0 4px #fbbf24,0 4px 0 rgba(0,0,0,.25)}
+.card.matched{animation:pulse .5s ease}
+@keyframes pulse{50%{transform:scale(1.1)}}
+#win{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:1.4rem;background:rgba(0,0,0,.45);z-index:10}
+#win.show{display:flex}
+#win .big{font-size:5.5rem;animation:pulse 1s ease infinite}
+#again{width:96px;height:96px;border-radius:50%;background:#fbbf24;border:none;font-size:3rem;box-shadow:0 6px 0 rgba(0,0,0,.3)}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:11}
+</style>
+</head>
+<body>
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div class="lvl sel" id="easy">🐣</div>
+  <div class="lvl" id="hard">🦁</div>
+</div>
+<div id="board"></div>
+<div id="win"><span class="big">🎉</span><button id="again">🔄</button></div>
+<canvas id="fx"></canvas>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function confetti(){
+  var cv=document.getElementById('fx'),cx=cv.getContext('2d');
+  cv.width=innerWidth;cv.height=innerHeight;
+  var P=[];for(var i=0;i<120;i++)P.push({x:Math.random()*cv.width,y:-20-Math.random()*cv.height*.5,
+    r:4+Math.random()*6,c:'hsl('+(Math.random()*360)+',90%,60%)',vy:2+Math.random()*3,vx:-1+Math.random()*2,a:Math.random()*6});
+  var t=0;
+  (function f(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    P.forEach(function(p){p.y+=p.vy;p.x+=p.vx;p.a+=.1;
+      cx.save();cx.translate(p.x,p.y);cx.rotate(p.a);cx.fillStyle=p.c;
+      cx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6);cx.restore();});
+    if(t++<220)requestAnimationFrame(f);else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+
+var EMOJI=['🐶','🐱','🦊','🐸','🐵','🦁','🐮','🐷','🐰','🦆','🐢','🐙'];
+var board=document.getElementById('board'),winEl=document.getElementById('win');
+var count=6,first=null,lock=false,matches=0;
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+function layout(){
+  var land=innerWidth>innerHeight;
+  var cols=count===6?(land?3:2):(land?4:3);
+  board.style.gridTemplateColumns='repeat('+cols+',1fr)';
+  board.style.gridTemplateRows='repeat('+(count/cols)+',1fr)';
+}
+addEventListener('resize',layout);
+
+function build(){
+  winEl.classList.remove('show');
+  board.innerHTML='';first=null;lock=false;matches=0;
+  var pool=shuffle(EMOJI.slice()).slice(0,count/2);
+  var deck=shuffle(pool.concat(pool));
+  deck.forEach(function(em){
+    var d=document.createElement('div');
+    d.className='card';
+    d.innerHTML='<div class="inner"><div class="face front"></div><div class="face back">'+em+'</div></div>';
+    d.dataset.e=em;
+    d.addEventListener('pointerdown',function(){flip(d)});
+    board.appendChild(d);
+  });
+  layout();
+}
+
+function flip(card){
+  A();
+  if(lock||card.classList.contains('flip'))return;
+  card.classList.add('flip');
+  tone(420,.08,'sine',.15,540);
+  if(!first){first=card;return}
+  lock=true;
+  var a=first,b=card;first=null;
+  if(a.dataset.e===b.dataset.e){
+    setTimeout(function(){
+      a.classList.add('matched');b.classList.add('matched');
+      tone(660,.12,'sine',.3);tone(880,.22,'sine',.3,0,.11);
+      matches++;lock=false;
+      if(matches===count/2){
+        confetti();
+        [523,659,784,1047,1319].forEach(function(f,i){tone(f,.3,'triangle',.3,0,.4+i*.12)});
+        setTimeout(function(){winEl.classList.add('show')},900);
+      }
+    },420);
+  }else{
+    setTimeout(function(){
+      a.classList.remove('flip');b.classList.remove('flip');
+      tone(220,.2,'sine',.18,175);
+      lock=false;
+    },850);
+  }
+}
+
+document.getElementById('easy').addEventListener('pointerdown',function(){
+  count=6;this.classList.add('sel');document.getElementById('hard').classList.remove('sel');build();
+});
+document.getElementById('hard').addEventListener('pointerdown',function(){
+  count=12;this.classList.add('sel');document.getElementById('easy').classList.remove('sel');build();
+});
+document.getElementById('again').addEventListener('pointerdown',function(e){e.stopPropagation();build()});
+build();
+</script>
+</body>
+</html>

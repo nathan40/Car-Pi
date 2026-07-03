@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Spell It!</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#35586e}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:10px;z-index:9}
+a.home,.tb{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:24px;text-decoration:none;border:3px solid transparent;color:#fff;font-weight:800}
+.tb.sel{border-color:#fff;background:rgba(255,255,255,.32)}
+#stars{margin-left:auto;color:#fff;font-weight:800;font-size:1.4rem;text-shadow:0 2px 4px rgba(0,0,0,.35)}
+#stage{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:70px 12px calc(16px + env(safe-area-inset-bottom))}
+#pic{display:flex;align-items:center;gap:14px}
+#emoji{font-size:clamp(4rem,20vmin,8rem);line-height:1;transition:transform .2s}
+#emoji.bounce{animation:bnc .6s ease}
+@keyframes bnc{30%{transform:scale(1.25) rotate(-5deg)}60%{transform:scale(.95) rotate(3deg)}}
+#hear{width:64px;height:64px;border-radius:50%;background:#f9c74f;border:none;font-size:1.9rem;box-shadow:0 5px 0 rgba(0,0,0,.3)}
+#hear:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.3)}
+#slots,#bank{display:flex;gap:2vmin;justify-content:center;flex-wrap:wrap;max-width:96vw}
+.slot{width:clamp(3.2rem,15vmin,5.4rem);height:clamp(3.2rem,15vmin,5.4rem);border-radius:14px;border:4px dashed rgba(255,255,255,.5);display:flex;align-items:center;justify-content:center;font-size:clamp(1.9rem,9vmin,3.2rem);font-weight:800;color:#2b3a44}
+.slot.full{border-style:solid;border-color:transparent;background:#fdf6ec;box-shadow:0 4px 0 rgba(0,0,0,.25)}
+.slot.full.vowel{background:#ffb4a2}
+.slot.read{animation:readp .3s ease}
+@keyframes readp{50%{transform:scale(1.25);background:#f9c74f}}
+.tile{width:clamp(3.2rem,15vmin,5.4rem);height:clamp(3.2rem,15vmin,5.4rem);border-radius:14px;background:#fdf6ec;display:flex;align-items:center;justify-content:center;font-size:clamp(1.9rem,9vmin,3.2rem);font-weight:800;color:#2b3a44;box-shadow:0 5px 0 rgba(0,0,0,.3);transition:transform .1s,opacity .2s}
+.tile.vowel{background:#ffb4a2}
+.tile:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.3)}
+.tile.used{opacity:0;pointer-events:none;transform:scale(.3)}
+.tile.no{animation:shake .35s ease}
+@keyframes shake{20%{transform:translateX(-8px)}45%{transform:translateX(8px)}70%{transform:translateX(-5px)}90%{transform:translateX(4px)}}
+.tile.hint{animation:glow 1s ease infinite}
+@keyframes glow{50%{box-shadow:0 0 0 6px #f9c74f,0 5px 0 rgba(0,0,0,.3);transform:scale(1.08)}}
+.upper .slot,.upper .tile{text-transform:uppercase}
+.spark{position:fixed;font-size:2.2rem;pointer-events:none;animation:sp .7s ease-out forwards;z-index:8}
+@keyframes sp{from{transform:scale(.4);opacity:1}to{transform:scale(1.7) translateY(-8vmin);opacity:0}}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:11}
+</style>
+</head>
+<body class="upper">
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div class="tb sel" id="lv3">🐣</div>
+  <div class="tb" id="lv4">🦁</div>
+  <div class="tb" id="case" style="font-size:1.1rem">Aa</div>
+  <div id="stars">⭐ 0</div>
+</div>
+<div id="stage">
+  <div id="pic"><span id="emoji"></span><button id="hear">🔊</button></div>
+  <div id="slots"></div>
+  <div id="bank"></div>
+</div>
+<canvas id="fx"></canvas>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function say(text,rate,keepQueue){
+  try{
+    if(!('speechSynthesis' in window))return;
+    if(!keepQueue)speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.rate=rate||1;u.pitch=1.1;u.lang='en-US';
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function confetti(){
+  var cv=document.getElementById('fx'),cx=cv.getContext('2d');
+  cv.width=innerWidth;cv.height=innerHeight;
+  var P=[];for(var i=0;i<110;i++)P.push({x:Math.random()*cv.width,y:-20-Math.random()*cv.height*.5,
+    r:4+Math.random()*6,c:'hsl('+(Math.random()*360)+',90%,60%)',vy:2+Math.random()*3,vx:-1+Math.random()*2,a:Math.random()*6});
+  var t=0;
+  (function f(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    P.forEach(function(p){p.y+=p.vy;p.x+=p.vx;p.a+=.1;
+      cx.save();cx.translate(p.x,p.y);cx.rotate(p.a);cx.fillStyle=p.c;
+      cx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6);cx.restore();});
+    if(t++<200)requestAnimationFrame(f);else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+function spark(px,py,e){
+  var s=document.createElement('span');s.className='spark';s.textContent=e||'✨';
+  s.style.left=(px-16)+'px';s.style.top=(py-16)+'px';
+  document.body.appendChild(s);setTimeout(function(){s.remove()},720);
+}
+
+var W3=[['cat','🐱'],['dog','🐶'],['sun','☀️'],['bus','🚌'],['pig','🐷'],['cow','🐮'],
+['hat','🎩'],['bed','🛏️'],['egg','🥚'],['bee','🐝'],['car','🚗'],['bug','🐛'],
+['fox','🦊'],['owl','🦉'],['ant','🐜'],['key','🔑'],['bat','🦇'],['hen','🐔'],
+['box','📦'],['web','🕸️']];
+var W4=[['fish','🐟'],['star','⭐'],['moon','🌙'],['cake','🍰'],['tree','🌳'],['frog','🐸'],
+['bear','🐻'],['bird','🐦'],['duck','🦆'],['boat','⛵'],['corn','🌽'],['lion','🦁'],
+['milk','🥛'],['ball','⚽'],['drum','🥁'],['ship','🚢'],['tent','⛺'],['sock','🧦'],
+['crab','🦀'],['snow','❄️']];
+var VOWELS='aeiou',ALPHA='abcdefghijklmnopqrstuvwxyz';
+
+var slotsEl=document.getElementById('slots'),bankEl=document.getElementById('bank');
+var emojiEl=document.getElementById('emoji'),starsEl=document.getElementById('stars');
+var list=W3,word='',pos=0,starCount=0,lastWord='',done=false;
+var unlocked=false,lastAction=Date.now();
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+function newWord(){
+  var pick;
+  do{pick=list[Math.random()*list.length|0]}while(pick[0]===lastWord&&list.length>1);
+  lastWord=pick[0];word=pick[0];pos=0;done=false;lastAction=Date.now();
+  emojiEl.textContent=pick[1];
+  emojiEl.classList.remove('bounce');void emojiEl.offsetWidth;emojiEl.classList.add('bounce');
+  slotsEl.innerHTML='';bankEl.innerHTML='';
+  for(var i=0;i<word.length;i++){
+    var s=document.createElement('div');s.className='slot';slotsEl.appendChild(s);
+  }
+  var letters=word.split('');
+  var extras=word.length===3?3:4;
+  while(extras>0){
+    var l=ALPHA[Math.random()*26|0];
+    if(word.indexOf(l)<0){letters.push(l);extras--}
+  }
+  shuffle(letters).forEach(function(l){
+    var t=document.createElement('div');
+    t.className='tile'+(VOWELS.indexOf(l)>-1?' vowel':'');
+    t.textContent=l;
+    t.addEventListener('pointerdown',function(){tap(t,l)});
+    bankEl.appendChild(t);
+  });
+  if(unlocked)say(word,1);
+}
+
+function tap(tile,letter){
+  A();unlocked=true;lastAction=Date.now();
+  if(done||tile.classList.contains('used'))return;
+  bankEl.querySelectorAll('.hint').forEach(function(n){n.classList.remove('hint')});
+  if(letter===word[pos]){
+    var slot=slotsEl.children[pos];
+    slot.textContent=letter;
+    slot.className='slot full'+(VOWELS.indexOf(letter)>-1?' vowel':'');
+    tile.classList.add('used');
+    pos++;
+    tone(440+pos*90,.1,'sine',.25,560+pos*90);
+    say(letter,1);
+    if(pos===word.length)complete();
+  }else{
+    tile.classList.remove('no');void tile.offsetWidth;tile.classList.add('no');
+    tone(180,.16,'square',.18,150);
+  }
+}
+
+function complete(){
+  done=true;
+  starCount++;starsEl.textContent='⭐ '+starCount;
+  say(word,0.55);say(word+'!',1,true);
+  var slots=slotsEl.children;
+  for(var i=0;i<slots.length;i++){
+    (function(i){setTimeout(function(){slots[i].classList.add('read')},250+i*300)})(i);
+  }
+  setTimeout(function(){
+    emojiEl.classList.remove('bounce');void emojiEl.offsetWidth;emojiEl.classList.add('bounce');
+    [523,659,784].forEach(function(f,i){tone(f,.25,'triangle',.3,0,i*.11)});
+    var r=slotsEl.getBoundingClientRect();
+    spark(r.left+r.width*.3,r.top,'⭐');spark(r.left+r.width*.7,r.top,'✨');
+  },250+slots.length*300);
+  if(starCount%5===0){
+    setTimeout(function(){
+      confetti();
+      say('Great job!',1,true);
+      [523,659,784,1047].forEach(function(f,i){tone(f,.3,'triangle',.32,0,i*.12)});
+    },900+slots.length*300);
+  }
+  setTimeout(newWord,2100+slots.length*300);
+}
+
+setInterval(function(){
+  if(done||Date.now()-lastAction<7000)return;
+  var tiles=bankEl.querySelectorAll('.tile');
+  for(var i=0;i<tiles.length;i++){
+    if(!tiles[i].classList.contains('used')&&tiles[i].textContent===word[pos]){
+      tiles[i].classList.add('hint');break;
+    }
+  }
+},1500);
+
+document.getElementById('hear').addEventListener('pointerdown',function(){
+  A();unlocked=true;say(word,0.9);
+  emojiEl.classList.remove('bounce');void emojiEl.offsetWidth;emojiEl.classList.add('bounce');
+});
+document.getElementById('lv3').addEventListener('pointerdown',function(){
+  list=W3;this.classList.add('sel');document.getElementById('lv4').classList.remove('sel');newWord();
+});
+document.getElementById('lv4').addEventListener('pointerdown',function(){
+  list=W4;this.classList.add('sel');document.getElementById('lv3').classList.remove('sel');newWord();
+});
+document.getElementById('case').addEventListener('pointerdown',function(){
+  document.body.classList.toggle('upper');
+  this.textContent=document.body.classList.contains('upper')?'Aa':'aA';
+  tone(500,.08,'sine',.2,650);
+});
+newWord();
+</script>
+</body>
+</html>

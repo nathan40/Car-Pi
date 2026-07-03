@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Fireworks</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:#0a0a1e}
+canvas{display:block;touch-action:none}
+a.home{position:fixed;top:10px;left:10px;width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:24px;text-decoration:none;z-index:9;font-family:system-ui,sans-serif}
+</style>
+</head>
+<body>
+<a class="home" href="index.html">🏠</a>
+<canvas id="c"></canvas>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function noise(d,v,fq,t){t=t||0;try{var a=A(),len=a.sampleRate*d,b=a.createBuffer(1,len,a.sampleRate),ch=b.getChannelData(0);
+for(var i=0;i<len;i++)ch[i]=Math.random()*2-1;
+var src=a.createBufferSource();src.buffer=b;
+var f=a.createBiquadFilter();f.type='lowpass';f.frequency.value=fq||1000;
+var g=a.createGain(),s=a.currentTime+t;
+g.gain.setValueAtTime(v||.2,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+src.connect(f);f.connect(g);g.connect(a.destination);src.start(s)}catch(e){}}
+
+var c=document.getElementById('c'),x=c.getContext('2d'),W,H,stars=[],sky=[];
+function rs(){
+  W=c.width=innerWidth;H=c.height=innerHeight;
+  stars=[];for(var i=0;i<70;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.8,r:Math.random()*1.4+.4,a:.3+Math.random()*.7});
+  sky=[];var bx=0;
+  while(bx<W){var bw=30+Math.random()*60,bh=30+Math.random()*90;sky.push({x:bx,w:bw,h:bh});bx+=bw+4}
+}
+rs();addEventListener('resize',rs);
+
+var rockets=[],sparks=[],palettes=[
+  ['#ffd166','#ffe8a3','#fff'],['#ef476f','#ff9eb5','#fff'],
+  ['#06d6a0','#8affdd','#fff'],['#4cc9f0','#a8e6ff','#fff'],
+  ['#c77dff','#e6c6ff','#fff'],['#ffd166','#ef476f','#06d6a0','#4cc9f0','#c77dff']
+];
+var lastInput=Date.now();
+
+function launch(tx,ty){
+  lastInput=Date.now();
+  rockets.push({x:tx,y:H+10,ty:Math.min(ty,H*.75),v:8+Math.random()*4,
+    pal:palettes[Math.random()*palettes.length|0]});
+  noise(.5,.12,1800);
+}
+addEventListener('pointerdown',function(e){A();launch(e.clientX,e.clientY)});
+
+function explode(r){
+  tone(150,.5,'sine',.4,40);
+  for(var i=0;i<5;i++)noise(.05,.12,4000,.1+Math.random()*.5);
+  var n=60+(Math.random()*40|0);
+  for(var i=0;i<n;i++){
+    var a=Math.random()*6.283,s=1+Math.random()*5;
+    sparks.push({x:r.x,y:r.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:1,
+      d:.008+Math.random()*.01,c:r.pal[Math.random()*r.pal.length|0]});
+  }
+}
+
+function draw(){
+  x.globalCompositeOperation='source-over';
+  x.fillStyle='rgba(10,10,30,.28)';x.fillRect(0,0,W,H);
+  for(var i=0;i<stars.length;i++){var st=stars[i];
+    x.fillStyle='rgba(255,255,255,'+(st.a*(.7+.3*Math.sin(Date.now()/700+i)))+')';
+    x.fillRect(st.x,st.y,st.r,st.r);}
+  x.fillStyle='#04040e';
+  for(var i=0;i<sky.length;i++){var b=sky[i];x.fillRect(b.x,H-b.h,b.w,b.h)}
+  x.globalCompositeOperation='lighter';
+  for(var i=rockets.length-1;i>=0;i--){
+    var r=rockets[i];r.y-=r.v;
+    sparks.push({x:r.x+(Math.random()*4-2),y:r.y,vx:0,vy:1,l:.5,d:.04,c:'#ffd166'});
+    x.fillStyle='#fff';x.fillRect(r.x-1.5,r.y-6,3,10);
+    if(r.y<=r.ty){rockets.splice(i,1);explode(r)}
+  }
+  for(var j=sparks.length-1;j>=0;j--){
+    var p=sparks[j];p.l-=p.d;
+    if(p.l<=0){sparks.splice(j,1);continue}
+    p.x+=p.vx;p.y+=p.vy;p.vy+=.045;p.vx*=.985;p.vy*=.985;
+    x.globalAlpha=Math.max(p.l,0);
+    x.fillStyle=p.c;
+    x.beginPath();x.arc(p.x,p.y,2.2,0,6.283);x.fill();
+  }
+  x.globalAlpha=1;
+  if(Date.now()-lastInput>6000){launch(Math.random()*W,H*(.15+Math.random()*.4));lastInput=Date.now()-3500}
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>

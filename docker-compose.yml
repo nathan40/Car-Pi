@@ -1,0 +1,62 @@
+services:
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - /srv/config/jellyfin:/config
+      - /srv/media/movies:/data/movies
+      - /srv/media/tv:/data/tvshows
+    ports:
+      - "8096:8096"
+    # OPTIONAL Pi 4 hardware transcoding (only if you choose to transcode —
+    # see the pre-encoding section; direct play needs none of this):
+    #devices:
+    #   - /dev/dri:/dev/dri
+    #   - /dev/video10:/dev/video10
+    #   - /dev/video11:/dev/video11
+    #   - /dev/video12:/dev/video12
+    restart: unless-stopped
+
+  audiobookshelf:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    environment:
+      - TZ=America/New_York
+    volumes:
+      - /srv/config/audiobookshelf/config:/config
+      - /srv/config/audiobookshelf/metadata:/metadata
+      - /srv/media/audiobooks:/audiobooks
+      - /srv/media/podcasts:/podcasts
+    ports:
+      - "13378:80"
+    restart: unless-stopped
+
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    user: "1000:1000"
+    environment:
+      - ND_SCANSCHEDULE=1h
+      - ND_LOGLEVEL=info
+      - ND_SESSIONTIMEOUT=24h
+      - TZ=America/Chicago
+    volumes:
+      - /srv/config/navidrome:/data
+      - /srv/media/music:/music:ro
+    ports:
+      - "4533:4533"
+    restart: unless-stopped
+  
+  homepage:
+    image: php:8-apache
+    container_name: homepage
+    volumes:
+      - /srv/homepage:/var/www/html:ro
+      - /srv/homepage/bingo:/var/www/state
+    ports:
+      - "80:80"
+    restart: unless-stopped

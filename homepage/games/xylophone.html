@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Xylophone</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:linear-gradient(180deg,#2b1a4d,#4a2a6b)}
+a.home{position:fixed;top:10px;left:10px;width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:24px;text-decoration:none;z-index:9}
+#bars{display:flex;height:100%;padding:74px 2vmin 3vmin;gap:1.6vmin;align-items:center;touch-action:none}
+.bar{flex:1;border-radius:2.4vmin;box-shadow:0 .8vmin 0 rgba(0,0,0,.35),inset 0 .6vmin 0 rgba(255,255,255,.35);transition:transform .12s,filter .12s;position:relative}
+.bar.hit{transform:scaleX(.92) scaleY(.97);filter:brightness(1.4)}
+.note{position:absolute;left:50%;top:-8px;font-size:5vmin;pointer-events:none;animation:fly 1s ease-out forwards}
+@keyframes fly{from{transform:translate(-50%,0);opacity:1}to{transform:translate(-50%,-16vmin) rotate(20deg);opacity:0}}
+</style>
+</head>
+<body>
+<a class="home" href="index.html">🏠</a>
+<div id="bars"></div>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function ding(f){try{
+  var a=A(),s=a.currentTime;
+  [[f,'triangle',.3,.8],[f*3,'sine',.07,.3]].forEach(function(sp){
+    var o=a.createOscillator(),g=a.createGain();
+    o.type=sp[1];o.frequency.value=sp[0];
+    g.gain.setValueAtTime(sp[2],s);g.gain.exponentialRampToValueAtTime(.001,s+sp[3]);
+    o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+sp[3]+.05);
+  });
+}catch(e){}}
+
+var NOTES=[523.25,587.33,659.25,698.46,783.99,880,987.77,1046.5];
+var COLORS=['#e63946','#f77f2f','#f9c74f','#90be6d','#43aa8b','#4d96d9','#7d5ba6','#d64fa0'];
+var MUSIC=['🎵','🎶','♪','♫'];
+var wrap=document.getElementById('bars');
+
+NOTES.forEach(function(f,i){
+  var b=document.createElement('div');
+  b.className='bar';
+  b.style.background=COLORS[i];
+  b.style.height=(94-i*7)+'%';
+  b.dataset.i=i;
+  wrap.appendChild(b);
+});
+
+function play(bar){
+  A();
+  ding(NOTES[+bar.dataset.i]);
+  bar.classList.remove('hit');void bar.offsetWidth;bar.classList.add('hit');
+  var n=document.createElement('span');
+  n.className='note';
+  n.textContent=MUSIC[Math.random()*MUSIC.length|0];
+  bar.appendChild(n);
+  setTimeout(function(){n.remove()},1000);
+  setTimeout(function(){bar.classList.remove('hit')},140);
+}
+
+var active={};
+wrap.addEventListener('pointerdown',function(e){
+  var b=e.target.closest('.bar');
+  if(b){play(b);active[e.pointerId]=+b.dataset.i}
+});
+wrap.addEventListener('pointermove',function(e){
+  if(!(e.pointerId in active))return;
+  var el=document.elementFromPoint(e.clientX,e.clientY);
+  var b=el&&el.closest?el.closest('.bar'):null;
+  if(b&&+b.dataset.i!==active[e.pointerId]){play(b);active[e.pointerId]=+b.dataset.i}
+});
+['pointerup','pointercancel'].forEach(function(ev){
+  addEventListener(ev,function(e){delete active[e.pointerId]});
+});
+</script>
+</body>
+</html>
