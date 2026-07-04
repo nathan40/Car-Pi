@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Number Ninja</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:linear-gradient(180deg,#1a1a2e,#16213e)}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:10px;z-index:9}
+a.home{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px;text-decoration:none;flex:none;color:#fff}
+#belt{color:#fff;font-weight:800;font-size:1.1rem}
+#timer{margin-left:auto;color:#fff;font-weight:800;font-size:1.4rem;text-shadow:0 2px 4px rgba(0,0,0,.4)}
+#stage{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5vmin;padding:70px 3vmin calc(16px + env(safe-area-inset-bottom))}
+#combo{color:#f9c74f;font-weight:800;font-size:1.2rem;min-height:1.5rem;text-shadow:0 2px 4px rgba(0,0,0,.4)}
+#problem{color:#fff;font-size:clamp(2.2rem,11vmin,4rem);font-weight:800;text-shadow:0 3px 6px rgba(0,0,0,.4)}
+#numbers{display:flex;flex-wrap:wrap;gap:2vmin;justify-content:center;max-width:94vw}
+.num{width:clamp(4rem,17vmin,5.8rem);height:clamp(4rem,17vmin,5.8rem);border-radius:16px;background:#fdf6ec;color:#2b3a44;display:flex;align-items:center;justify-content:center;font-size:clamp(1.8rem,7.5vmin,2.6rem);font-weight:800;box-shadow:0 5px 0 rgba(0,0,0,.3);transition:transform .1s}
+.num:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.3)}
+.num.no{animation:shake .35s ease}
+@keyframes shake{20%{transform:translateX(-8px)}45%{transform:translateX(8px)}70%{transform:translateX(-5px)}90%{transform:translateX(4px)}}
+#start{padding:1.4rem 2.4rem;border-radius:999px;background:#f9c74f;font-size:1.6rem;font-weight:800;box-shadow:0 6px 0 rgba(0,0,0,.3);color:#2b1a00}
+#end{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:2vmin;background:rgba(0,0,0,.6);z-index:12;color:#fff;text-align:center}
+#end.show{display:flex}
+#endbelt{font-size:4.5rem}
+#endscore{font-size:1.8rem;font-weight:800}
+</style>
+</head>
+<body>
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div id="belt">🥋 White Belt</div>
+  <div id="timer"></div>
+</div>
+<div id="stage">
+  <div id="combo"></div>
+  <div id="problem"></div>
+  <div id="numbers"></div>
+  <div id="start">▶️ Start</div>
+</div>
+<div id="end">
+  <span id="endbelt"></span>
+  <span id="endscore"></span>
+  <div id="start2" style="padding:1rem 2rem;border-radius:999px;background:#f9c74f;font-size:1.3rem;font-weight:800;color:#2b1a00">🔄 Again</div>
+</div>
+<script src="shared/players.js"></script>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function store(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k));localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}}
+
+var BELTS=[
+ ['🥋 White Belt','#fff'],['🟡 Yellow Belt','#f9c74f'],['🟠 Orange Belt','#f3722c'],
+ ['🟢 Green Belt','#43aa2b'],['🔵 Blue Belt','#277da1'],['🟤 Brown Belt','#6b4423'],
+ ['⚫ Black Belt','#111']
+];
+var problemEl=document.getElementById('problem'),numsEl=document.getElementById('numbers');
+var timerEl=document.getElementById('timer'),comboEl=document.getElementById('combo'),beltEl=document.getElementById('belt');
+var startBtn=document.getElementById('start'),endEl=document.getElementById('end');
+var playing=false,timeLeft=60,combo=0,score=0,answer=0,locked=false,profile=null;
+var lifetimeXp=store('nj_xp')||0;
+
+function beltForXp(xp){
+  var idx=Math.min(BELTS.length-1,xp/40|0);
+  return BELTS[idx];
+}
+function updateBeltDisplay(){
+  beltEl.textContent=beltForXp(lifetimeXp)[0];
+}
+updateBeltDisplay();
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+function difficultyTier(){
+  // Escalates with in-round score, capped by profile level.
+  var cap=profile&&profile.level==='k'?1:(profile&&profile.level==='toddler'?0:3);
+  return Math.min(cap,score/6|0);
+}
+
+function makeProblem(){
+  var tier=difficultyTier();
+  var a,b,op,ans;
+  if(tier===0){
+    a=1+(Math.random()*5|0);b=1+(Math.random()*5|0);op='+';ans=a+b;
+  }else if(tier===1){
+    op=Math.random()<0.5?'+':'-';
+    a=1+(Math.random()*10|0);b=1+(Math.random()*10|0);
+    if(op==='-'&&b>a){var tmp=a;a=b;b=tmp}
+    ans=op==='+'?a+b:a-b;
+  }else if(tier===2){
+    var ops=['+','-','×','÷'];op=ops[Math.random()*4|0];
+    if(op==='×'){a=2+(Math.random()*10|0);b=2+(Math.random()*10|0);ans=a*b}
+    else if(op==='÷'){b=2+(Math.random()*10|0);ans=1+(Math.random()*10|0);a=b*ans}
+    else{a=1+(Math.random()*20|0);b=1+(Math.random()*20|0);if(op==='-'&&b>a){var t2=a;a=b;b=t2}ans=op==='+'?a+b:a-b}
+  }else{
+    // Two-step: (a op1 b) op2 c — kept non-negative at every stage.
+    var ops2=['+','-','×'];
+    var op1=ops2[Math.random()*3|0],op2=ops2[Math.random()*3|0];
+    a=1+(Math.random()*10|0);b=1+(Math.random()*10|0);
+    if(op1==='-'&&b>a){var t1=a;a=b;b=t1}
+    var mid=op1==='+'?a+b:(op1==='-'?a-b:a*b);
+    var c=1+(Math.random()*6|0);
+    if(op2==='-'&&c>mid)c=1+(Math.random()*mid|0);
+    ans=op2==='+'?mid+c:(op2==='-'?mid-c:mid*c);
+    problemEl.textContent=a+' '+op1+' '+b+' '+op2+' '+c+' = ?';
+    answer=ans;
+    buildChoices(ans);
+    return;
+  }
+  problemEl.textContent=a+' '+op+' '+b+' = ?';
+  answer=ans;
+  buildChoices(ans);
+}
+
+function buildChoices(ans){
+  var choices=[ans];
+  while(choices.length<4){
+    var d=ans+(Math.random()*10|0)-5;
+    if(d!==ans&&choices.indexOf(d)<0)choices.push(d);
+  }
+  numsEl.innerHTML='';
+  shuffle(choices).forEach(function(n){
+    var b=document.createElement('div');b.className='num';b.textContent=n;
+    b.addEventListener('pointerdown',function(){pick(n,b)});
+    numsEl.appendChild(b);
+  });
+  locked=false;
+}
+
+function pick(n,btn){
+  A();
+  if(!playing||locked)return;
+  if(n===answer){
+    locked=true;
+    combo++;score++;
+    comboEl.textContent=combo>=3?('🔥 x'+combo):'';
+    tone(523+combo*15,.12,'triangle',.28);
+    makeProblem();
+  }else{
+    combo=0;comboEl.textContent='';
+    btn.classList.remove('no');void btn.offsetWidth;btn.classList.add('no');
+    tone(180,.15,'square',.16,150);
+  }
+}
+
+function startRound(){
+  playing=true;score=0;combo=0;timeLeft=60;
+  comboEl.textContent='';
+  startBtn.style.display='none';
+  endEl.classList.remove('show');
+  timerEl.textContent='⏱️ 60';
+  makeProblem();
+  var iv=setInterval(function(){
+    timeLeft--;
+    timerEl.textContent='⏱️ '+timeLeft;
+    if(timeLeft<=0){
+      clearInterval(iv);
+      endRound();
+    }
+  },1000);
+}
+
+function endRound(){
+  playing=false;
+  problemEl.textContent='';numsEl.innerHTML='';timerEl.textContent='';comboEl.textContent='';
+  lifetimeXp+=score;store('nj_xp',lifetimeXp);
+  updateBeltDisplay();
+  if(profile)Players.award(profile,Math.max(1,score/3|0));
+  var belt=beltForXp(lifetimeXp);
+  document.getElementById('endbelt').textContent=belt[0].split(' ')[0];
+  document.getElementById('endscore').textContent=score+' correct!';
+  [523,659,784].forEach(function(f,i){tone(f,.25,'triangle',.3,0,i*.1)});
+  endEl.classList.add('show');
+}
+
+startBtn.addEventListener('pointerdown',function(){A();startRound()});
+document.getElementById('start2').addEventListener('pointerdown',function(){A();startRound()});
+
+Players.init(function(p){profile=p});
+</script>
+</body>
+</html>

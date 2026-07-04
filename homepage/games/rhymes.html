@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Rhyme Time</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#eee5f8}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:10px;z-index:9}
+a.home,#mute{width:52px;height:52px;border-radius:50%;background:rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center;font-size:22px;text-decoration:none;flex:none}
+#stars{margin-left:auto;color:#3a2b52;font-weight:800;font-size:1.3rem}
+#stage{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:70px 3vmin calc(16px + env(safe-area-inset-bottom))}
+#target{display:flex;flex-direction:column;align-items:center;gap:.6rem}
+#temoji{font-size:clamp(5rem,24vmin,9rem);line-height:1;transition:transform .2s}
+#temoji.bounce{animation:bnc .6s ease}
+@keyframes bnc{30%{transform:scale(1.25) rotate(-5deg)}60%{transform:scale(.95) rotate(3deg)}}
+#tword{font-size:clamp(1.3rem,6vmin,2rem);font-weight:800;color:#3a2b52}
+#choices{display:flex;gap:3vmin;justify-content:center;flex-wrap:wrap}
+.choice{display:flex;flex-direction:column;align-items:center;gap:.3rem;width:clamp(5.4rem,22vmin,7.6rem);padding:1.4vmin;border-radius:20px;background:#fdf6ec;box-shadow:0 5px 0 rgba(0,0,0,.2);transition:transform .1s}
+.choice:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.2)}
+.choice .e{font-size:clamp(2.2rem,10vmin,3.6rem);line-height:1}
+.choice .w{font-size:.85rem;font-weight:700;color:#3a2b52}
+.choice.no{animation:shake .35s ease}
+@keyframes shake{20%{transform:translateX(-8px)}45%{transform:translateX(8px)}70%{transform:translateX(-5px)}90%{transform:translateX(4px)}}
+.choice.yes{animation:pulse .5s ease}
+@keyframes pulse{50%{transform:scale(1.14)}}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:11}
+</style>
+</head>
+<body>
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div id="mute">🔊</div>
+  <div id="stars">⭐ 0</div>
+</div>
+<div id="stage">
+  <div id="target">
+    <span id="temoji">🐱</span>
+    <span id="tword">cat</span>
+  </div>
+  <div id="choices"></div>
+</div>
+<canvas id="fx"></canvas>
+<script src="shared/players.js"></script>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function say(text,rate,keepQueue){
+  if(muted)return;
+  try{
+    if(!('speechSynthesis' in window))return;
+    if(!keepQueue)speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.rate=rate||1;u.pitch=1.1;u.lang='en-US';
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function confetti(){
+  var cv=document.getElementById('fx'),cx=cv.getContext('2d');
+  cv.width=innerWidth;cv.height=innerHeight;
+  var P=[];for(var i=0;i<110;i++)P.push({x:Math.random()*cv.width,y:-20-Math.random()*cv.height*.5,
+    r:4+Math.random()*6,c:'hsl('+(Math.random()*360)+',90%,60%)',vy:2+Math.random()*3,vx:-1+Math.random()*2,a:Math.random()*6});
+  var t=0;
+  (function f(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    P.forEach(function(p){p.y+=p.vy;p.x+=p.vx;p.a+=.1;
+      cx.save();cx.translate(p.x,p.y);cx.rotate(p.a);cx.fillStyle=p.c;
+      cx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6);cx.restore();});
+    if(t++<200)requestAnimationFrame(f);else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+function store(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k));localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}}
+
+// [target-emoji, target-word, rhyme-emoji, rhyme-word, [distractor-emoji, distractor-word]...]
+var SETS=[
+ ['🐱','cat','🎩','hat',['🐕','dog'],['☀️','sun']],
+ ['🐕','dog','🪵','log',['🐱','cat'],['🐟','fish']],
+ ['🐟','fish','🍽️','dish',['🐕','dog'],['🌟','star']],
+ ['🌟','star','🚗','car',['🐟','fish'],['🌙','moon']],
+ ['🌙','moon','🥄','spoon',['🌟','star'],['🐝','bee']],
+ ['🐝','bee','🌳','tree',['🌙','moon'],['🐮','cow']],
+ ['🐮','cow','🐷','sow',['🐝','bee'],['🧦','sock']],
+ ['🧦','sock','🪨','rock',['🐮','cow'],['🐟','fish']],
+ ['🍰','cake','🐍','snake',['🚂','train'],['🌙','moon']],
+ ['🚂','train','🌧️','rain',['🍰','cake'],['🐝','bee']],
+ ['🐸','frog','🪵','log',['🐟','fish'],['🌟','star']],
+ ['🐻','bear','🪑','chair',['🐱','cat'],['🐟','fish']],
+ ['🌳','tree','🐝','bee',['🌙','moon'],['🐮','cow']],
+ ['🏠','house','🐭','mouse',['🐕','dog'],['🌟','star']],
+ ['🐭','mouse','🏠','house',['🐟','fish'],['🌳','tree']],
+ ['🔑','key','🐝','bee',['🌙','moon'],['🐮','cow']],
+ ['🐐','goat','🚤','boat',['🐕','dog'],['🐟','fish']],
+ ['🚤','boat','🐐','goat',['🌟','star'],['🍰','cake']],
+ ['🍯','jug','🐞','bug',['🐟','fish'],['🌙','moon']],
+ ['🐞','bug','🍯','jug',['🐕','dog'],['🌳','tree']],
+ ['🌞','sun','🍩','bun',['🌙','moon'],['🐮','cow']],
+ ['🍩','bun','🌞','sun',['🐝','bee'],['🐟','fish']],
+ ['🐦','bird','🍮','curd',['🐕','dog'],['🌟','star']],
+ ['🧦','sock','🕐','clock',['🐮','cow'],['🌳','tree']],
+ ['🕐','clock','🧦','sock',['🐟','fish'],['🌙','moon']],
+ ['🐷','pig','🌳','fig',['🐝','bee'],['🐮','cow']],
+ ['🚗','car','🌟','star',['🐟','fish'],['🌳','tree']],
+ ['🥧','pie','🥧','tie',['🐮','cow'],['🌳','tree']],
+ ['🍦','cone','☎️','phone',['🐝','bee'],['🐟','fish']],
+ ['🦴','bone','☎️','phone',['🌙','moon'],['🐮','cow']],
+ ['☎️','phone','🦴','bone',['🐟','fish'],['🌳','tree']],
+ ['⭐','star','🚗','car',['🐕','dog'],['🌙','moon']],
+ ['🐳','whale','🪣','pail',['🐟','fish'],['🌳','tree']],
+ ['🪣','pail','🐳','whale',['🐮','cow'],['🌟','star']],
+ ['🦆','duck','🚚','truck',['🐕','dog'],['🌙','moon']],
+ ['🚚','truck','🦆','duck',['🐟','fish'],['🐮','cow']],
+ ['🐝','bee','🔑','key',['🌟','star'],['🐕','dog']],
+ ['🐀','rat','🎩','hat',['🐮','cow'],['🐟','fish']],
+ ['🌲','pine','🐷','swine',['🐕','dog'],['🌙','moon']],
+ ['🧀','cheese','🐝','bees',['🐮','cow'],['🌳','tree']]
+];
+var LEVELS=['far','close'];
+var targetEl=document.getElementById('temoji'),twordEl=document.getElementById('tword');
+var choicesEl=document.getElementById('choices'),starsEl=document.getElementById('stars'),muteBtn=document.getElementById('mute');
+var muted=false,starCount=store('rh_stars')||0,locked=false,profile=null;
+starsEl.textContent='⭐ '+starCount;
+muteBtn.addEventListener('pointerdown',function(){
+  muted=!muted;muteBtn.textContent=muted?'🔇':'🔊';
+  if(muted)try{speechSynthesis.cancel()}catch(e){}
+});
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+function round(){
+  locked=false;
+  var s=SETS[Math.random()*SETS.length|0];
+  targetEl.textContent=s[0];twordEl.textContent=s[1];
+  targetEl.classList.remove('bounce');void targetEl.offsetWidth;targetEl.classList.add('bounce');
+  var opts=shuffle([[s[2],s[3],true],[s[4][0],s[4][1],false],[s[5][0],s[5][1],false]]);
+  choicesEl.innerHTML='';
+  opts.forEach(function(o){
+    var b=document.createElement('div');b.className='choice';
+    b.innerHTML='<span class="e">'+o[0]+'</span><span class="w">'+o[1]+'</span>';
+    b.addEventListener('pointerdown',function(){pick(o[2],b)});
+    choicesEl.appendChild(b);
+    say(o[1],0.9,true);
+  });
+  say('What rhymes with '+s[1]+'?',1);
+}
+
+function pick(correct,btn){
+  A();
+  if(locked)return;
+  if(correct){
+    locked=true;btn.classList.add('yes');
+    starCount++;starsEl.textContent='⭐ '+starCount;store('rh_stars',starCount);
+    if(profile)Players.award(profile,1);
+    tone(523,.15,'triangle',.3);tone(659,.15,'triangle',.3,0,.1);tone(784,.25,'triangle',.32,0,.2);
+    say('Yes! That rhymes!',1,true);
+    if(starCount%5===0)confetti();
+    setTimeout(round,1500);
+  }else{
+    btn.classList.remove('no');void btn.offsetWidth;btn.classList.add('no');
+    tone(180,.18,'square',.18,150);
+  }
+}
+
+Players.init(function(p){profile=p;round()});
+</script>
+</body>
+</html>

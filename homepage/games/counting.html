@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Count & Crunch</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:linear-gradient(180deg,#3a2a63,#5d3a8f)}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:10px;z-index:9}
+a.home,.lvl,#mute{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px;text-decoration:none;border:3px solid transparent;color:#fff;flex:none}
+.lvl.sel{border-color:#fff;background:rgba(255,255,255,.32)}
+#stars{margin-left:auto;color:#fff;font-weight:800;font-size:1.3rem;text-shadow:0 2px 4px rgba(0,0,0,.35)}
+#stage{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:70px 3vmin calc(16px + env(safe-area-inset-bottom))}
+#ask{color:#fff;font-size:clamp(1.2rem,5.5vmin,1.8rem);font-weight:700;text-align:center;text-shadow:0 2px 4px rgba(0,0,0,.4)}
+#tray{display:flex;flex-wrap:wrap;gap:1.6vmin;justify-content:center;align-items:center;max-width:88vw;min-height:20vmin}
+.obj{font-size:clamp(2.4rem,10vmin,4rem);line-height:1;transition:transform .2s}
+.obj.gone{transform:scale(0);opacity:0}
+#numbers{display:flex;flex-wrap:wrap;gap:1.6vmin;justify-content:center;max-width:94vw}
+.num{width:clamp(3.6rem,16vmin,5.6rem);height:clamp(3.6rem,16vmin,5.6rem);border-radius:18px;background:#fdf6ec;color:#2b3a44;display:flex;align-items:center;justify-content:center;font-size:clamp(1.8rem,8vmin,2.8rem);font-weight:800;box-shadow:0 5px 0 rgba(0,0,0,.3);transition:transform .1s}
+.num:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.3)}
+.num.no{animation:shake .35s ease}
+@keyframes shake{20%{transform:translateX(-8px)}45%{transform:translateX(8px)}70%{transform:translateX(-5px)}90%{transform:translateX(4px)}}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:11}
+.spark{position:fixed;font-size:2.2rem;pointer-events:none;animation:sp .7s ease-out forwards;z-index:8}
+@keyframes sp{from{transform:scale(.4);opacity:1}to{transform:scale(1.7) translateY(-8vmin);opacity:0}}
+</style>
+</head>
+<body>
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div class="lvl" id="lv1">🐣</div>
+  <div class="lvl sel" id="lv2">🔟</div>
+  <div class="lvl" id="lv3">2️⃣0️⃣</div>
+  <div id="mute">🔊</div>
+  <div id="stars">⭐ 0</div>
+</div>
+<div id="stage">
+  <div id="ask">How many? 👹</div>
+  <div id="tray"></div>
+  <div id="numbers"></div>
+</div>
+<canvas id="fx"></canvas>
+<script src="shared/players.js"></script>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function noise(d,v,fq){try{var a=A(),len=a.sampleRate*d,b=a.createBuffer(1,len,a.sampleRate),ch=b.getChannelData(0);
+for(var i=0;i<len;i++)ch[i]=Math.random()*2-1;
+var src=a.createBufferSource();src.buffer=b;
+var f=a.createBiquadFilter();f.type='lowpass';f.frequency.value=fq||900;
+var g=a.createGain(),s=a.currentTime;
+g.gain.setValueAtTime(v||.2,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+src.connect(f);f.connect(g);g.connect(a.destination);src.start(s)}catch(e){}}
+function say(text,rate,keepQueue){
+  if(muted)return;
+  try{
+    if(!('speechSynthesis' in window))return;
+    if(!keepQueue)speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.rate=rate||1;u.pitch=1.1;u.lang='en-US';
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function confetti(){
+  var cv=document.getElementById('fx'),cx=cv.getContext('2d');
+  cv.width=innerWidth;cv.height=innerHeight;
+  var P=[];for(var i=0;i<110;i++)P.push({x:Math.random()*cv.width,y:-20-Math.random()*cv.height*.5,
+    r:4+Math.random()*6,c:'hsl('+(Math.random()*360)+',90%,60%)',vy:2+Math.random()*3,vx:-1+Math.random()*2,a:Math.random()*6});
+  var t=0;
+  (function f(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    P.forEach(function(p){p.y+=p.vy;p.x+=p.vx;p.a+=.1;
+      cx.save();cx.translate(p.x,p.y);cx.rotate(p.a);cx.fillStyle=p.c;
+      cx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6);cx.restore();});
+    if(t++<200)requestAnimationFrame(f);else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+function spark(px,py,e){
+  var s=document.createElement('span');s.className='spark';s.textContent=e||'✨';
+  s.style.left=(px-16)+'px';s.style.top=(py-16)+'px';
+  document.body.appendChild(s);setTimeout(function(){s.remove()},720);
+}
+function store(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k));localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}}
+
+var OBJECTS=['🍪','🍎','⚽','🌟','🚗','🎈','🐟','🌸','🧸','🍓'];
+var trayEl=document.getElementById('tray'),numsEl=document.getElementById('numbers'),askEl=document.getElementById('ask');
+var starsEl=document.getElementById('stars'),muteBtn=document.getElementById('mute');
+var muted=false,starCount=store('cc_stars')||0,answer=0,locked=false,profile=null;
+starsEl.textContent='⭐ '+starCount;
+
+var LEVEL={max:10,scattered:true};
+function setLevel(id,btn){
+  document.querySelectorAll('.lvl').forEach(function(n){n.classList.remove('sel')});
+  btn.classList.add('sel');
+  if(id==='lv1'){LEVEL={max:5,countAlong:true}}
+  else if(id==='lv2'){LEVEL={max:10}}
+  else{LEVEL={max:20}}
+  round();
+}
+document.getElementById('lv1').addEventListener('pointerdown',function(){setLevel('lv1',this)});
+document.getElementById('lv2').addEventListener('pointerdown',function(){setLevel('lv2',this)});
+document.getElementById('lv3').addEventListener('pointerdown',function(){setLevel('lv3',this)});
+muteBtn.addEventListener('pointerdown',function(){
+  muted=!muted;muteBtn.textContent=muted?'🔇':'🔊';
+  if(muted)try{speechSynthesis.cancel()}catch(e){}
+});
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+function round(){
+  locked=false;
+  var em=OBJECTS[Math.random()*OBJECTS.length|0];
+  answer=1+(Math.random()*LEVEL.max|0);
+  askEl.textContent='How many '+em+' ?';
+  trayEl.innerHTML='';
+  var scatter=Math.random()<0.5&&!LEVEL.countAlong;
+  for(var i=0;i<answer;i++){
+    var s=document.createElement('span');s.className='obj';s.textContent=em;
+    if(scatter){
+      s.style.transform='rotate('+(Math.random()*30-15)+'deg)';
+      s.style.margin=(Math.random()*10-5)+'px '+(Math.random()*6)+'px';
+    }
+    trayEl.appendChild(s);
+  }
+  var choices=[answer];
+  while(choices.length<3){
+    var d=Math.max(1,answer+(Math.random()*5|0)-2);
+    if(d!==answer&&choices.indexOf(d)<0&&d<=LEVEL.max+2)choices.push(d);
+  }
+  numsEl.innerHTML='';
+  shuffle(choices).forEach(function(n){
+    var b=document.createElement('div');b.className='num';b.textContent=n;
+    b.addEventListener('pointerdown',function(){pick(n,b)});
+    numsEl.appendChild(b);
+  });
+  if(LEVEL.countAlong)countAlong();
+}
+
+function countAlong(){
+  var kids=trayEl.children;
+  for(var i=0;i<kids.length;i++){
+    (function(i){setTimeout(function(){
+      if(muted)return;
+      say(String(i+1),1,i>0);
+      kids[i].style.transform='scale(1.3)';
+      setTimeout(function(){kids[i].style.transform='scale(1)'},250);
+    },500+i*650)})(i);
+  }
+}
+
+function pick(n,btn){
+  A();
+  if(locked)return;
+  if(n===answer){
+    locked=true;
+    starCount++;starsEl.textContent='⭐ '+starCount;store('cc_stars',starCount);
+    if(profile)Players.award(profile,1);
+    tone(523,.15,'triangle',.3);tone(659,.15,'triangle',.3,0,.1);tone(784,.25,'triangle',.32,0,.2);
+    say('Yes! '+n+'!',1);
+    var r=btn.getBoundingClientRect();
+    spark(r.left+r.width/2,r.top,'⭐');
+    var kids=trayEl.children;
+    for(var i=0;i<kids.length;i++)(function(k){setTimeout(function(){k.classList.add('gone')},i*60)})(kids[i]);
+    noise(.1,.2,700);
+    if(starCount%5===0){confetti();say('Great counting!',1,true)}
+    setTimeout(round,1400);
+  }else{
+    btn.classList.remove('no');void btn.offsetWidth;btn.classList.add('no');
+    tone(180,.18,'square',.18,150);
+  }
+}
+
+Players.init(function(p){profile=p;round()});
+</script>
+</body>
+</html>

@@ -25,11 +25,27 @@
 #   3. Run:  sudo ./setup.sh
 #   4. Answer the questions (all asked up front), confirm, walk away.
 #
+# ALREADY INSTALLED? Update the repo copy (the curl bootstrap pulls latest by
+# itself), run it again, and it offers:
+#   u) Update      — latest packages, Docker images, and app files; every
+#                    setting kept exactly as it is (answers are saved in
+#                    /srv/setup.conf). No questions, no reboot.
+#   r) Reconfigure — asks the questions again with your current settings as
+#                    the defaults, then applies the changes.
+# If a newer setup.sh has questions your saved answers don't cover, it goes
+# straight to Reconfigure so the new questions get asked (old answers stay
+# pre-filled as the defaults).
+#
 # The script is safe to re-run: every step is idempotent.
 #
 set -Eeuo pipefail
 
 REPO_URL="https://github.com/nathan40/Car-Pi.git"
+
+# Bump this whenever a NEW question is added to the ask section below. Saved
+# answers from an older version then force Reconfigure mode on re-runs, so the
+# new question actually gets asked instead of silently using a default.
+SETUP_QUESTIONS_VERSION=1
 
 # --------------------------------------------------------------- bootstrap --
 # Lets a brand-new Pi go from nothing to a running installer with one curl
@@ -119,6 +135,52 @@ curl -fsSL --max-time 15 -o /dev/null https://deb.debian.org \
     || die "No internet access. Connect the Pi via Ethernet to a network with internet, then re-run."
 ok "online"
 ok "built-in Wi-Fi interface: $WLAN"
+
+# ------------------------------------------------------ existing install ----
+# A finished install saves its answers here so re-runs can update in place.
+CONF_FILE="/srv/setup.conf"
+if [[ ! -f "$CONF_FILE" && -f /etc/car-pi/setup.conf ]]; then
+    mv /etc/car-pi/setup.conf "$CONF_FILE"     # early versions kept it there
+    rmdir /etc/car-pi 2>/dev/null || true
+fi
+MODE="fresh"                          # fresh | update | reconfigure
+if [[ -f "$CONF_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+    CONF_COMPLETE="yes"
+    for v in DEVICE_NAME SSID WIFI_PASS WIFI_BAND WIFI_COUNTRY SUBNET_PREFIX TIMEZONE RUN_USER MUSIC_VOLUME; do
+        [[ -n "${!v:-}" ]] || CONF_COMPLETE="no"
+    done
+    echo
+    if [[ "$CONF_COMPLETE" != "yes" ]]; then
+        warn "Found $CONF_FILE but it's missing some settings — going through the"
+        warn "questions again (saved values pre-filled where available)."
+        MODE="reconfigure"
+    elif (( ${CONF_VERSION:-0} < SETUP_QUESTIONS_VERSION )); then
+        warn "This version of setup.sh asks question(s) your saved answers don't cover"
+        warn "yet — reconfiguring: your existing answers are the pre-filled defaults,"
+        warn "just answer anything new."
+        MODE="reconfigure"
+    else
+        echo "${BLD}Existing Car-Pi install found${RST} — '$DEVICE_NAME', configured $(date -r "$CONF_FILE" '+%Y-%m-%d')."
+        echo "    u) Update      — get the latest packages, Docker images, and app files;"
+        echo "                     keep every setting exactly as it is (no questions, no reboot)"
+        echo "    r) Reconfigure — ask the questions again (current settings are the defaults)"
+        echo "    q) Quit        — change nothing"
+        while true; do
+            read -rp "  What would you like to do? [u]: " MODE_ANS; MODE_ANS="${MODE_ANS:-u}"
+            case "${MODE_ANS,,}" in
+                u|update)      MODE="update";      break ;;
+                r|reconfigure) MODE="reconfigure"; break ;;
+                q|quit)        echo "  Nothing was changed."; exit 0 ;;
+                *) echo "    Enter u, r, or q." ;;
+            esac
+        done
+    fi
+elif [[ -f /srv/docker-compose.yml ]]; then
+    warn "This Pi looks like an existing Car-Pi install, but no saved answers were found"
+    warn "(set up by an older setup.sh). Answer the questions once more — they'll be saved this time."
+fi
 
 # ---------------------------------------------------------- ask helpers -----
 ask() {                       # ask VAR "Prompt" "default" [validator]
@@ -218,22 +280,39 @@ while IFS= read -r part; do
     MEDIA_CANDIDATES+=("$part"$'\t'"$pfstype"$'\t'"$psize")
 done < <(lsblk -rpno NAME,TYPE 2>/dev/null | awk '$2=="part"{print $1}')
 
+# Is /srv/media already set up in fstab by a previous run?
+MEDIA_EXISTING="no"
+if grep -q '[[:space:]]/srv/media[[:space:]]' /etc/fstab 2>/dev/null; then MEDIA_EXISTING="yes"; fi
+
 # =================================================================== ask ====
+MEDIA_DEV=""; MEDIA_FSTYPE=""; MEDIA_UUID=""
+if [[ "$MODE" == "update" ]]; then
+    # Update mode: reuse every saved answer, ask nothing.
+    id -u "$RUN_USER" >/dev/null 2>&1 || die "Saved service user '$RUN_USER' no longer exists — re-run and pick Reconfigure."
+    PUID="$(id -u "$RUN_USER")"
+    PGID="$(id -g "$RUN_USER")"
+    PI_IP="$SUBNET_PREFIX.1"
+    DHCP_START="$SUBNET_PREFIX.100"
+    DHCP_END="$SUBNET_PREFIX.200"
+    AUTO_REBOOT="no"
+else
+# Fresh install or reconfigure — saved settings, when present, are the defaults.
 echo
 echo "${BLD}Car-Pi setup — answer these questions, confirm, then walk away.${RST}"
 echo "  (Press Enter to accept the [default].)"
 echo
 echo "${BLD}-- Identity --${RST}"
-ask DEVICE_NAME "Device name (hostname; also becomes the web address <name>.lan)" "carpi" valid_hostname
+ask DEVICE_NAME "Device name (hostname; also becomes the web address <name>.lan)" "${DEVICE_NAME:-carpi}" valid_hostname
 
 echo
 echo "${BLD}-- Wi-Fi access point (what the tablets join in the car) --${RST}"
-ask SSID "Wi-Fi network name (SSID)" "RoadTrip" valid_ssid
+ask SSID "Wi-Fi network name (SSID)" "${SSID:-RoadTrip}" valid_ssid
 echo "    (Password is shown as you type so you can't typo it — it's the family car Wi-Fi.)"
-ask WIFI_PASS "Wi-Fi password (8-63 chars)" "" valid_pass
+ask WIFI_PASS "Wi-Fi password (8-63 chars)" "${WIFI_PASS:-}" valid_pass
 echo "    5 GHz = faster, ideal in/around the car (default).  2.4 GHz = slower but longer range."
+BAND_DEFAULT="${WIFI_BAND:-5}"
 while true; do
-    read -rp "  Wi-Fi band — 5 or 2.4 [5]: " WIFI_BAND; WIFI_BAND="${WIFI_BAND:-5}"
+    read -rp "  Wi-Fi band — 5 or 2.4 [$BAND_DEFAULT]: " WIFI_BAND; WIFI_BAND="${WIFI_BAND:-$BAND_DEFAULT}"
     case "$WIFI_BAND" in
         5|5ghz|5GHz)     WIFI_BAND="5";   break ;;
         2.4|2|24|2.4ghz) WIFI_BAND="2.4"; break ;;
@@ -241,13 +320,13 @@ while true; do
     esac
 done
 COUNTRY_DEFAULT="$(raspi-config nonint get_wifi_country 2>/dev/null || true)"
-ask WIFI_COUNTRY "Wi-Fi country code (regulatory domain)" "${COUNTRY_DEFAULT:-US}" valid_country
+ask WIFI_COUNTRY "Wi-Fi country code (regulatory domain)" "${WIFI_COUNTRY:-${COUNTRY_DEFAULT:-US}}" valid_country
 WIFI_COUNTRY="${WIFI_COUNTRY^^}"
 
 echo
 echo "${BLD}-- Network addressing --${RST}"
 echo "    The Pi takes .1 of this subnet; tablets get .100-.200 by DHCP (/24)."
-ask SUBNET_IN "IP subnet for the car network (first three octets)" "192.168.4" valid_subnet
+ask SUBNET_IN "IP subnet for the car network (first three octets)" "${SUBNET_PREFIX:-192.168.4}" valid_subnet
 PI_IP="$SUBNET_PREFIX.1"
 DHCP_START="$SUBNET_PREFIX.100"
 DHCP_END="$SUBNET_PREFIX.200"
@@ -256,20 +335,21 @@ echo
 echo "${BLD}-- System --${RST}"
 TZ_DEFAULT="$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)"
 ask TIMEZONE "Timezone (no internet in the car = no NTP, so set it right)" "${TZ_DEFAULT:-America/Chicago}" valid_tz
-ask RUN_USER "Pi user account that owns the media/services" "${SUDO_USER:-pi}" valid_user
+ask RUN_USER "Pi user account that owns the media/services" "${RUN_USER:-${SUDO_USER:-pi}}" valid_user
 PUID="$(id -u "$RUN_USER")"
 PGID="$(id -g "$RUN_USER")"
 
 echo
 echo "${BLD}-- Car audio --${RST}"
 echo "    Music auto-shuffles out the 3.5mm aux jack on every boot (guide Part 9)."
-ask MUSIC_VOLUME "Music volume at boot, 0-100 (the car's own knob stays the main control)" "80" valid_volume
+ask MUSIC_VOLUME "Music volume at boot, 0-100 (the car's own knob stays the main control)" "${MUSIC_VOLUME:-80}" valid_volume
 MUSIC_VOLUME=$((10#$MUSIC_VOLUME))   # normalize e.g. "080" -> 80
 
 echo
 echo "${BLD}-- Media storage --${RST}"
-MEDIA_DEV=""; MEDIA_FSTYPE=""; MEDIA_UUID=""
-if (( ${#MEDIA_CANDIDATES[@]} > 0 )); then
+if [[ "$MEDIA_EXISTING" == "yes" ]]; then
+    echo "    Keeping the existing /srv/media drive (already set up in /etc/fstab)."
+elif (( ${#MEDIA_CANDIDATES[@]} > 0 )); then
     echo "    The guide recommends keeping media OFF the SD card. Found these unmounted partition(s):"
     echo "      0) SD card — keep media on the OS card at /srv/media"
     i=1
@@ -298,6 +378,7 @@ echo
 echo "${BLD}-- Finish --${RST}"
 ask_yn "Reboot automatically when setup finishes? (needed to bring the Wi-Fi AP up)" "Y"
 AUTO_REBOOT="$REPLY_YN"
+fi   # end of the fresh/reconfigure question block
 
 # ------------------------------------------------------------- summary ------
 LAN_NAME="${DEVICE_NAME}.lan"
@@ -316,6 +397,8 @@ echo "  Service user           : $RUN_USER (uid $PUID)"
 echo "  Boot music volume      : $MUSIC_VOLUME"
 if [[ -n "$MEDIA_DEV" ]]; then
     echo "  Media storage          : $MEDIA_DEV ($MEDIA_FSTYPE) mounted at /srv/media"
+elif [[ "$MEDIA_EXISTING" == "yes" ]]; then
+    echo "  Media storage          : existing /srv/media drive (kept as-is)"
 else
     echo "  Media storage          : SD card (/srv/media)"
 fi
@@ -326,9 +409,15 @@ if (( ${#OS_WARNINGS[@]} > 0 )); then
 fi
 echo "${BLD}==========================================${RST}"
 echo
-echo "  Everything from here on is unattended (apt upgrade, Docker install,"
-echo "  image pulls, AP + audio setup). Expect 15-40 minutes on a Pi 4."
-ask_yn "Start the install now?" "Y"
+if [[ "$MODE" == "update" ]]; then
+    echo "  Everything from here on is unattended (apt upgrade, image pulls, app-file"
+    echo "  refresh, service restarts). Usually just a few minutes."
+    ask_yn "Start the update now?" "Y"
+else
+    echo "  Everything from here on is unattended (apt upgrade, Docker install,"
+    echo "  image pulls, AP + audio setup). Expect 15-40 minutes on a Pi 4."
+    ask_yn "Start the install now?" "Y"
+fi
 [[ "$REPLY_YN" == "yes" ]] || { echo "  Nothing was changed. Re-run when ready."; exit 0; }
 
 # From here on: unattended. Log everything.
@@ -381,7 +470,11 @@ step "System update + packages (hostapd, dnsmasq, mpd, mpc, ...)"
 apt-get update
 apt-get "${APT_OPTS[@]}" full-upgrade
 apt-get "${APT_OPTS[@]}" install hostapd dnsmasq mpd mpc alsa-utils fake-hwclock avahi-daemon curl ca-certificates
-systemctl stop hostapd dnsmasq mpd 2>/dev/null || true
+if [[ "$MODE" == "fresh" ]]; then
+    # keep the not-yet-configured daemons quiet during the first build; on an
+    # already-installed box they stay up through the update
+    systemctl stop hostapd dnsmasq mpd 2>/dev/null || true
+fi
 ok "packages installed"
 
 step "Docker engine"
@@ -411,7 +504,7 @@ step "Folder layout under /srv"
 mkdir -p /srv/media/{movies,tv,audiobooks,podcasts,music}
 mkdir -p /srv/config/{jellyfin,navidrome}
 mkdir -p /srv/config/audiobookshelf/{config,metadata}
-mkdir -p /srv/homepage/bingo
+mkdir -p /srv/config/arcade-state
 chown -R "$PUID:$PGID" /srv/config /srv/homepage 2>/dev/null || true
 chown -R "$PUID:$PGID" /srv/media 2>/dev/null || true   # no-op on vfat/exfat/ntfs (uid= mount option rules there)
 ok "/srv layout created and owned by $RUN_USER"
@@ -424,17 +517,19 @@ sed -i -E \
     -e "s|user: \"[0-9]+:[0-9]+\"|user: \"$PUID:$PGID\"|" \
     -e "s|TZ=.+|TZ=$TIMEZONE|" \
     /srv/docker-compose.yml
+find /srv/homepage/games -maxdepth 1 -name '*.html' -delete 2>/dev/null || true   # drop games removed upstream
 cp -a "$SCRIPT_DIR/homepage/." /srv/homepage/
 find /srv/homepage -name '*.md' -delete
 if [[ "$LAN_NAME" != "media.lan" ]]; then
     sed -i "s|media\.lan|$LAN_NAME|g" /srv/homepage/index.html
 fi
 chown -R "$PUID:$PGID" /srv/homepage 2>/dev/null || true
-chown -R 33:33 /srv/homepage/bingo   # 33 = www-data inside php:8-apache (Car Bingo shared state)
+chown -R 33:33 /srv/config/arcade-state   # 33 = www-data inside php:8-apache (game shared state)
 ok "dashboard + $(find /srv/homepage/games -name '*.html' | wc -l) game files deployed (URLs use $LAN_NAME)"
 
 step "Media containers (pulls images — the long part)"
-(cd /srv && docker compose up -d)
+(cd /srv && docker compose pull)                       # grabs newer images on update runs
+(cd /srv && docker compose up -d --remove-orphans)     # recreates only what changed
 (cd /srv && docker compose ps)
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
 
@@ -701,6 +796,24 @@ EOF
 chown "$PUID:$PGID" "$SUMMARY_FILE" 2>/dev/null || true
 ok "cheat-sheet saved: $SUMMARY_FILE"
 
+step "Saving your answers (future re-runs offer a no-questions Update)"
+{
+    echo "# Car-Pi setup answers ($(date '+%Y-%m-%d %H:%M')) — sourced by setup.sh on re-runs."
+    printf '%s=%q\n' \
+        CONF_VERSION  "$SETUP_QUESTIONS_VERSION" \
+        DEVICE_NAME   "$DEVICE_NAME" \
+        SSID          "$SSID" \
+        WIFI_PASS     "$WIFI_PASS" \
+        WIFI_BAND     "$WIFI_BAND" \
+        WIFI_COUNTRY  "$WIFI_COUNTRY" \
+        SUBNET_PREFIX "$SUBNET_PREFIX" \
+        TIMEZONE      "$TIMEZONE" \
+        RUN_USER      "$RUN_USER" \
+        MUSIC_VOLUME  "$MUSIC_VOLUME"
+} > "$CONF_FILE"
+chmod 600 "$CONF_FILE"
+ok "saved to $CONF_FILE (holds the Wi-Fi password — root-only)"
+
 # ---------------------------------------------------------------- done ------
 echo
 echo "${BLD}${GRN}=====================================================${RST}"
@@ -708,12 +821,22 @@ echo "${BLD}${GRN} Car-Pi setup complete.${RST}"
 echo "${BLD}${GRN}=====================================================${RST}"
 cat "$SUMMARY_FILE"
 echo
-CURRENT_STEP="reboot"
+CURRENT_STEP="finish"
+if [[ "$MODE" != "fresh" && "$AUTO_REBOOT" == "no" ]]; then
+    info "Restarting services so the new files and settings take effect..."
+    systemctl try-restart "${WLAN}-static.service" hostapd dnsmasq avahi-daemon 2>/dev/null || true
+    systemctl restart mpd car-music-start car-music-web shutdown-server
+    ok "services restarted (tablets may see a few seconds of Wi-Fi blip)"
+fi
 if [[ "$AUTO_REBOOT" == "yes" ]]; then
     info "Rebooting in 10 seconds to bring up the '$SSID' access point..."
     info "(SSH over Ethernet keeps working after the reboot. See you at http://$LAN_NAME)"
     sleep 10
     reboot
+elif [[ "$MODE" == "update" ]]; then
+    info "Update complete — everything is running the latest files. No reboot needed."
+elif [[ "$MODE" == "reconfigure" ]]; then
+    info "New settings are live. If you changed the device name, reboot to finish renaming:  sudo reboot"
 else
     info "Reboot when ready to bring up the '$SSID' access point:  sudo reboot"
 fi

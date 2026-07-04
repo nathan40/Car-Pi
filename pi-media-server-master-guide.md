@@ -1,6 +1,6 @@
 # Raspberry Pi 4 — Offline Mobile Media Server (Master Build Guide)
  
-A self-contained, **fully offline** media box for road trips. It broadcasts its own Wi-Fi and serves media apps plus a kids' games arcade to the kids' tablets (and optionally a hotel TV). No internet required once it's built.
+A self-contained, **fully offline** media box for road trips. It broadcasts its own Wi-Fi and serves media apps plus a kids' games arcade to the kids' tablets (or a device hooked up to a TV). No internet required once it's built.
  
 - **Jellyfin** — video
 - **Audiobookshelf** — audiobooks & podcasts
@@ -127,7 +127,7 @@ nano /srv/docker-compose.yml
 ```
 see docker-compose.yml file in folder
 
-Four services: `jellyfin`, `audiobookshelf`, `navidrome`, and `homepage` (`php:8-apache`, serves the dashboard + games arcade on port 80). `homepage` mounts `/srv/homepage` read-only at the web root, plus a second, **writable** mount at `/srv/homepage/bingo` → `/var/www/state` for the Car Bingo game's shared state (Part 10) — create that folder before first `up`, see §3.5.
+Four services: `jellyfin`, `audiobookshelf`, `navidrome`, and `homepage` (`php:8-apache`, serves the dashboard + games arcade on port 80). `homepage` mounts `/srv/homepage` read-only at the web root, plus a second, **writable** mount at `/srv/config/arcade-state` → `/var/www/state` for any game's shared state (Car Bingo's `bingo.json`, the arcade profiles/stars `arcade.json`, and any future game's scores/stats — every PHP game just writes its own JSON file into this same folder) (Part 10) — create that folder before first `up`, see §3.5.
  
 ### 3.4 Start and do first-run setup
  
@@ -156,8 +156,8 @@ see updated html file in homepage/index.html
 Create the writable bingo-state folder mentioned in §3.3 now, so `docker compose up -d` doesn't fail on a missing path:
 
 ```bash
-sudo mkdir -p /srv/homepage/bingo
-sudo chown -R 33:33 /srv/homepage/bingo   # 33 = www-data inside the php:8-apache image
+sudo mkdir -p /srv/config/arcade-state
+sudo chown -R 33:33 /srv/config/arcade-state   # 33 = www-data inside the php:8-apache image
 ```
  
 ---
@@ -670,12 +670,12 @@ Two more additions on top of the homepage from Parts 3 and 9: a **Games** tile l
 ### What this changes on the Pi
 
 - **New files:**
-  - `/srv/homepage/games/` — one self-contained `.html` per game, plus `games/index.html` (the arcade hub) and `games/bingo/` (`bingo.html` + `bingo-api.php`)
+  - `/srv/homepage/games/` — one self-contained `.html` per game, plus `games/index.html` (the arcade hub), `games/bingo.html`, and `games/bingo-api.php`
   - `/srv/shutdown-server.py`
   - `/etc/systemd/system/shutdown-server.service`
   - `/srv/homepage/index.html` (adds the **Games** card and the power button; replaces the one from Part 9)
 - **New service (enabled at boot):** `shutdown-server`
-- **Uses the existing** `/srv/homepage/bingo` → `/var/www/state` mount from §3.3/§3.5 (no new volume)
+- **Uses the existing** `/srv/config/arcade-state` → `/var/www/state` mount from §3.3/§3.5 (no new volume)
 
 ### New quick reference
 
@@ -683,7 +683,7 @@ Two more additions on top of the homepage from Parts 3 and 9: a **Games** tile l
 |---|---|
 | Games hub | `http://media.lan/games/` |
 | Shutdown API | `http://192.168.4.1:8097` (`GET /` = health check, `POST /shutdown` = power off) |
-| Games state (Bingo) | `/srv/homepage/bingo/bingo.json`, mounted read/write into the `homepage` container at `/var/www/state` |
+| Games state (Bingo) | `/srv/config/arcade-state/bingo.json`, mounted read/write into the `homepage` container at `/var/www/state` |
 
 ### 10.1 The games hub
 
@@ -701,18 +701,18 @@ Two more additions on top of the homepage from Parts 3 and 9: a **Games** tile l
 | 🔷 Shapes | `shapes.html` | |
 | 🚗 Vroom! | `racer.html` | |
 | 🃏 Memory | `memory.html` | |
-| 🚌 Car Bingo | `bingo/bingo.html` + `bingo/bingo-api.php` | the only game with server-side shared state |
+| 🚌 Car Bingo | `bingo.html` + `bingo-api.php` | the only game with server-side shared state |
 | 🔤 Spell It! | `words.html` | |
 
 ```bash
-sudo mkdir -p /srv/homepage/games/bingo
+sudo mkdir -p /srv/homepage/games
 # copy each game .html into /srv/homepage/games/, index.html into /srv/homepage/games/,
-# and bingo.html + bingo-api.php into /srv/homepage/games/bingo/
+# and bingo.html + bingo-api.php into /srv/homepage/games/ (flat, same folder as every other game)
 ```
 
 Everything under `/srv/homepage` is served read-only (per the `homepage` service's `:ro` mount in §3.3), so no extra permissions are needed for the static game files themselves.
 
-**Car Bingo's shared state.** `bingo-api.php` is a small stdlib-only PHP API (`state | claim | mark | newgame | reset`) that deals a 4×16 tile "Minnesota road trip" card per player and tracks marks/wins in a flock-locked JSON file at `/var/www/state/bingo.json` — i.e. the `/srv/homepage/bingo` folder created in §3.5. Up to 4 tablets can claim a player slot and mark tiles independently; the server itself detects bingo lines (4 rows, 4 columns, 2 diagonals) so kids can't fudge a win. The tile pool (deer, tractors, rest stops, etc.) is a plain PHP array at the top of the file — edit it to match wherever you're actually driving.
+**Car Bingo's shared state.** `bingo-api.php` is a small stdlib-only PHP API (`state | claim | mark | newgame | reset`) that deals a 4×16 tile "Minnesota road trip" card per player and tracks marks/wins in a flock-locked JSON file at `/var/www/state/bingo.json` — i.e. the `/srv/config/arcade-state` folder created in §3.5. Up to 4 tablets can claim a player slot and mark tiles independently; the server itself detects bingo lines (4 rows, 4 columns, 2 diagonals) so kids can't fudge a win. The tile pool (deer, tractors, rest stops, etc.) is a plain PHP array at the top of the file — edit it to match wherever you're actually driving.
 
 ### 10.2 Dashboard power-off button
 
@@ -814,7 +814,7 @@ On a tablet joined to RoadTrip:
 ### Troubleshooting (Part 10)
 
 - **"Games" card 404s:** confirm files landed under `/srv/homepage/games/` (not `/srv/games/`) — the container only serves `/srv/homepage`.
-- **Bingo marks don't sync between tablets:** check `/srv/homepage/bingo` is owned by `33:33` (www-data) and writable; `bingo-api.php` returns an explicit `cannot open state file` error in its JSON if the mount is missing or read-only.
+- **Bingo marks don't sync between tablets:** check `/srv/config/arcade-state` is owned by `33:33` (www-data) and writable; `bingo-api.php` returns an explicit `cannot open state file` error in its JSON if the mount is missing or read-only.
 - **Power button does nothing / "Couldn't reach the media box":** `systemctl status shutdown-server`, and confirm port 8097 isn't blocked — there's no firewall in this build, so this is almost always the service not running.
 - **Pi doesn't actually power off:** `shutdown-server` must run as **root** (`User=root` in the unit) — `systemctl poweroff` fails silently otherwise; check `journalctl -u shutdown-server`.
 

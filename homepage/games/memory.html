@@ -33,6 +33,12 @@ a.home,.lvl{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255
   <a class="home" href="index.html">🏠</a>
   <div class="lvl sel" id="easy">🐣</div>
   <div class="lvl" id="hard">🦁</div>
+  <div class="lvl" id="deckbtn">🃏</div>
+</div>
+<div id="deckpicker" style="position:fixed;inset:0;z-index:20;display:none;flex-direction:column;align-items:center;justify-content:center;gap:2.2vmin;background:rgba(0,0,0,.55)">
+  <div style="color:#fff;font-size:1.3rem;font-weight:800">Pick a deck</div>
+  <div id="deckopts" style="display:flex;flex-wrap:wrap;gap:1.6vmin;justify-content:center;max-width:640px"></div>
+  <div id="deckclose" style="color:rgba(255,255,255,.75);font-size:1rem;padding:.6rem 1.2rem">close</div>
 </div>
 <div id="board"></div>
 <div id="win"><span class="big">🎉</span><button id="again">🔄</button></div>
@@ -61,6 +67,28 @@ function confetti(){
 }
 
 var EMOJI=['🐶','🐱','🦊','🐸','🐵','🦁','🐮','🐷','🐰','🦆','🐢','🐙'];
+
+// Each deck is a list of pairs [sideA, sideB] — for the classic emoji deck both
+// sides are identical; concept decks (Aa/aa, number/dot, fact/answer) show
+// different faces per side but still count as one matched pair.
+var LETTERS='abcdefghijklmnopqrstuvwxyz'.split('');
+var DOTS=['●','●●','●●●','●●●●','●●●●●','●●●●●●','●●●●●●●','●●●●●●●●','●●●●●●●●●','●●●●●●●●●●'];
+var FACTS=[];
+(function(){
+  var tables=[2,3,4,5,6,7,8,9,10,11,12];
+  tables.forEach(function(a){
+    for(var b=2;b<=6;b++)FACTS.push([a+'×'+b,String(a*b)]);
+  });
+})();
+
+var DECKS={
+  animals:{label:'🐶 Animals',pairs:function(){return EMOJI.map(function(e){return[e,e]})}},
+  letters:{label:'Aa ↔ aa',pairs:function(){return LETTERS.map(function(l){return[l.toUpperCase(),l]})}},
+  numbers:{label:'🔢 Number ↔ Dots',pairs:function(){return DOTS.map(function(d,i){return[String(i+1),d]})}},
+  facts:{label:'✖️ Fact ↔ Answer',pairs:function(){return shuffle(FACTS.slice())}}
+};
+var deckId='animals';
+
 var board=document.getElementById('board'),winEl=document.getElementById('win');
 var count=6,first=null,lock=false,matches=0;
 
@@ -77,13 +105,17 @@ addEventListener('resize',layout);
 function build(){
   winEl.classList.remove('show');
   board.innerHTML='';first=null;lock=false;matches=0;
-  var pool=shuffle(EMOJI.slice()).slice(0,count/2);
-  var deck=shuffle(pool.concat(pool));
-  deck.forEach(function(em){
+  var pool=shuffle(DECKS[deckId].pairs()).slice(0,count/2);
+  var deck=[];
+  pool.forEach(function(pair,i){
+    deck.push({pid:i,face:pair[0]});
+    deck.push({pid:i,face:pair[1]});
+  });
+  shuffle(deck).forEach(function(card){
     var d=document.createElement('div');
     d.className='card';
-    d.innerHTML='<div class="inner"><div class="face front"></div><div class="face back">'+em+'</div></div>';
-    d.dataset.e=em;
+    d.innerHTML='<div class="inner"><div class="face front"></div><div class="face back">'+card.face+'</div></div>';
+    d.dataset.pid=card.pid;
     d.addEventListener('pointerdown',function(){flip(d)});
     board.appendChild(d);
   });
@@ -98,7 +130,7 @@ function flip(card){
   if(!first){first=card;return}
   lock=true;
   var a=first,b=card;first=null;
-  if(a.dataset.e===b.dataset.e){
+  if(a.dataset.pid===b.dataset.pid){
     setTimeout(function(){
       a.classList.add('matched');b.classList.add('matched');
       tone(660,.12,'sine',.3);tone(880,.22,'sine',.3,0,.11);
@@ -125,6 +157,25 @@ document.getElementById('hard').addEventListener('pointerdown',function(){
   count=12;this.classList.add('sel');document.getElementById('easy').classList.remove('sel');build();
 });
 document.getElementById('again').addEventListener('pointerdown',function(e){e.stopPropagation();build()});
+
+var deckpicker=document.getElementById('deckpicker'),deckopts=document.getElementById('deckopts');
+Object.keys(DECKS).forEach(function(id){
+  var b=document.createElement('div');
+  b.textContent=DECKS[id].label;
+  b.style.cssText='padding:1rem 1.4rem;border-radius:16px;background:#fdf6ec;color:#2b3a44;font-weight:800;font-size:1.1rem;box-shadow:0 5px 0 rgba(0,0,0,.25)';
+  b.addEventListener('pointerdown',function(){
+    deckId=id;
+    deckpicker.style.display='none';
+    build();
+  });
+  deckopts.appendChild(b);
+});
+document.getElementById('deckbtn').addEventListener('pointerdown',function(){
+  deckpicker.style.display='flex';
+});
+document.getElementById('deckclose').addEventListener('pointerdown',function(){
+  deckpicker.style.display='none';
+});
 build();
 </script>
 </body>

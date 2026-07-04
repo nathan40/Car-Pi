@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pattern Party</title>
+<style>
+*{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#c9f2c7}
+#top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;padding:10px;z-index:9}
+a.home,.lvl{width:52px;height:52px;border-radius:50%;background:rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center;font-size:22px;text-decoration:none;border:3px solid transparent;flex:none}
+.lvl.sel{border-color:#2b6b1f;background:rgba(0,0,0,.22)}
+#stars{margin-left:auto;color:#2b3a24;font-weight:800;font-size:1.3rem}
+#stage{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:70px 3vmin calc(16px + env(safe-area-inset-bottom))}
+#cater{display:flex;gap:1vmin;align-items:center;flex-wrap:wrap;justify-content:center;max-width:94vw}
+.seg{font-size:clamp(2.6rem,11vmin,4.4rem);line-height:1;transition:transform .2s}
+.seg.q{opacity:.4}
+#choices{display:flex;gap:3vmin;justify-content:center}
+.choice{width:clamp(4.4rem,18vmin,6.6rem);height:clamp(4.4rem,18vmin,6.6rem);border-radius:20px;background:#fdf6ec;display:flex;align-items:center;justify-content:center;font-size:clamp(2.2rem,10vmin,3.6rem);box-shadow:0 5px 0 rgba(0,0,0,.25);transition:transform .1s}
+.choice:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.25)}
+.choice.no{animation:shake .35s ease}
+@keyframes shake{20%{transform:translateX(-8px)}45%{transform:translateX(8px)}70%{transform:translateX(-5px)}90%{transform:translateX(4px)}}
+.choice.yes{animation:pulse .5s ease}
+@keyframes pulse{50%{transform:scale(1.18)}}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:11}
+</style>
+</head>
+<body>
+<div id="top">
+  <a class="home" href="index.html">🏠</a>
+  <div class="lvl" id="lv0">🐣</div>
+  <div class="lvl sel" id="lv1">🐛</div>
+  <div id="stars">⭐ 0</div>
+</div>
+<div id="stage">
+  <div id="cater"></div>
+  <div id="choices"></div>
+</div>
+<canvas id="fx"></canvas>
+<script src="shared/players.js"></script>
+<script>
+document.addEventListener('contextmenu',function(e){e.preventDefault()});
+var AC=window.AudioContext||window.webkitAudioContext,actx=null;
+function A(){actx=actx||new AC();if(actx.state==='suspended')actx.resume();return actx}
+function tone(f,d,type,v,f2,t){t=t||0;try{var a=A(),o=a.createOscillator(),g=a.createGain(),s=a.currentTime+t;
+o.type=type||'sine';o.frequency.setValueAtTime(f,s);if(f2)o.frequency.exponentialRampToValueAtTime(f2,s+d);
+g.gain.setValueAtTime(v||.25,s);g.gain.exponentialRampToValueAtTime(.001,s+d);
+o.connect(g);g.connect(a.destination);o.start(s);o.stop(s+d+.05)}catch(e){}}
+function confetti(){
+  var cv=document.getElementById('fx'),cx=cv.getContext('2d');
+  cv.width=innerWidth;cv.height=innerHeight;
+  var P=[];for(var i=0;i<110;i++)P.push({x:Math.random()*cv.width,y:-20-Math.random()*cv.height*.5,
+    r:4+Math.random()*6,c:'hsl('+(Math.random()*360)+',90%,60%)',vy:2+Math.random()*3,vx:-1+Math.random()*2,a:Math.random()*6});
+  var t=0;
+  (function f(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    P.forEach(function(p){p.y+=p.vy;p.x+=p.vx;p.a+=.1;
+      cx.save();cx.translate(p.x,p.y);cx.rotate(p.a);cx.fillStyle=p.c;
+      cx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6);cx.restore();});
+    if(t++<200)requestAnimationFrame(f);else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+function store(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k));localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}}
+
+var SETS=[
+ ['🔴','🔵'],['🟢','🟡'],['🟣','🟠'],['⭐','🌙'],['🍎','🍏'],
+ ['🐱','🐶'],['🌸','🍀']
+];
+var caterEl=document.getElementById('cater'),choicesEl=document.getElementById('choices'),starsEl=document.getElementById('stars');
+var starCount=store('pp_stars')||0,locked=false,mode='pattern',profile=null;
+starsEl.textContent='⭐ '+starCount;
+
+document.getElementById('lv0').addEventListener('pointerdown',function(){
+  mode='toddler';this.classList.add('sel');document.getElementById('lv1').classList.remove('sel');round();
+});
+document.getElementById('lv1').addEventListener('pointerdown',function(){
+  mode='pattern';this.classList.add('sel');document.getElementById('lv0').classList.remove('sel');round();
+});
+
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.random()*(i+1)|0,t=a[i];a[i]=a[j];a[j]=t}return a}
+
+// Pattern templates by complexity, using placeholder tokens A/B/C mapped to emoji at build time.
+var TEMPLATES=[
+  ['A','B','A','B','A','B'],
+  ['A','B','B','A','B','B'],
+  ['A','A','B','B','A','A','B','B'],
+  ['A','B','C','A','B','C']
+];
+
+function round(){
+  locked=false;
+  caterEl.innerHTML='';choicesEl.innerHTML='';
+  var set=shuffle(SETS.slice())[0];
+  if(mode==='toddler'){
+    // Simple color/shape matching: show 4 of one emoji, ask which matches (no sequence logic).
+    var target=set[Math.random()*2|0];
+    for(var i=0;i<4;i++){
+      var s=document.createElement('span');s.className='seg';s.textContent=target;caterEl.appendChild(s);
+    }
+    var qmark=document.createElement('span');qmark.className='seg q';qmark.textContent='❓';caterEl.appendChild(qmark);
+    var opts=shuffle([target,set[1-set.indexOf(target)]||set[1]]);
+    buildChoices(opts,target);
+    return;
+  }
+  var complexity=Math.min(TEMPLATES.length-1,starCount/4|0);
+  var tmpl=TEMPLATES[Math.min(complexity,TEMPLATES.length-1)];
+  var symbols={A:set[0],B:set[1],C:set[2]||shuffle(SETS.slice())[1][0]};
+  var seq=tmpl.slice(0,tmpl.length-1);
+  var correctToken=tmpl[tmpl.length-1];
+  seq.forEach(function(tok){
+    var s=document.createElement('span');s.className='seg';s.textContent=symbols[tok];caterEl.appendChild(s);
+  });
+  var qmark=document.createElement('span');qmark.className='seg q';qmark.textContent='❓';caterEl.appendChild(qmark);
+  var wrongTokens=Object.keys(symbols).filter(function(k){return k!==correctToken});
+  var opts=[symbols[correctToken]];
+  shuffle(wrongTokens).forEach(function(k){if(opts.length<3)opts.push(symbols[k])});
+  while(opts.length<3){
+    var extra=shuffle(SETS.slice())[0][0];
+    if(opts.indexOf(extra)<0)opts.push(extra);
+  }
+  buildChoices(shuffle(opts),symbols[correctToken]);
+}
+
+function buildChoices(opts,answer){
+  opts.forEach(function(em){
+    var b=document.createElement('div');b.className='choice';b.textContent=em;
+    b.addEventListener('pointerdown',function(){pick(em,answer,b)});
+    choicesEl.appendChild(b);
+  });
+}
+
+function pick(em,answer,btn){
+  A();
+  if(locked)return;
+  if(em===answer){
+    locked=true;
+    btn.classList.add('yes');
+    starCount++;starsEl.textContent='⭐ '+starCount;store('pp_stars',starCount);
+    if(profile)Players.award(profile,1);
+    tone(523,.15,'triangle',.3);tone(659,.15,'triangle',.3,0,.1);tone(784,.25,'triangle',.32,0,.2);
+    var s=document.createElement('span');s.className='seg';s.textContent=em;
+    var qmark=caterEl.querySelector('.q');
+    if(qmark)caterEl.replaceChild(s,qmark);
+    if(starCount%5===0)confetti();
+    setTimeout(round,1100);
+  }else{
+    btn.classList.remove('no');void btn.offsetWidth;btn.classList.add('no');
+    tone(180,.18,'square',.18,150);
+  }
+}
+
+Players.init(function(p){profile=p;round()});
+</script>
+</body>
+</html>

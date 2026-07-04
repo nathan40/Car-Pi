@@ -15,6 +15,15 @@ Have you ever wanted a server with media on a road trip? This is a fully offline
    (Already have the repo cloned locally? Just run `sudo ./setup.sh` directly from inside it.)
 4. Answer the questions (all asked up front), confirm, and walk away. It's safe to re-run — every step is idempotent.
 
+## Updating an existing install
+
+Run the same one-liner (or `sudo ./setup.sh` from a freshly pulled repo) on an already-built Pi. The installer detects the existing install and offers:
+
+- **Update** — refreshes OS packages, Docker images, and all app files (dashboard, games, music/shutdown services), keeping every setting exactly as it is. No questions, no reboot — services restart in place.
+- **Reconfigure** — asks the setup questions again with your current settings pre-filled as the defaults, then applies the changes.
+
+Your answers are saved on the Pi in `/srv/setup.conf` (root-only, since it includes the Wi-Fi password). If a newer `setup.sh` adds setup questions your saved answers don't cover, the script goes straight to Reconfigure so you're asked the new questions — everything you already answered stays pre-filled. Media on the drive and app data (Jellyfin/Audiobookshelf/Navidrome libraries, bingo game state) are untouched by an update.
+
 ## What it is
 
 Car-Pi turns a Raspberry Pi 4 into a self-contained, fully offline media server for the car (or a hotel room, cabin, or anywhere else without internet). Passengers connect to the Pi's own Wi-Fi access point — no cellular data or internet connection needed once it's built.
