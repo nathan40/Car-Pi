@@ -566,6 +566,7 @@ fi
 (cd /srv && docker compose ps)
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
 
+if [[ "$MODE" == "fresh" || "$RESET_APPS" == "yes" ]]; then
 step "Auto-creating admin accounts (no wizards to click through)"
 # No security concern here — this box is offline, in the car, on its own
 # Wi-Fi. Every account below uses a blank or throwaway password so nobody
@@ -795,6 +796,10 @@ if [[ -n "$ABS_TOKEN" ]]; then
 else
     warn "Couldn't log in to Audiobookshelf as $CARPI_USER/$CARPI_PASS — an existing account with a"
     warn "different password is likely already set up. Add libraries by hand once, if needed."
+fi
+else
+    step "Admin accounts / libraries (skipped)"
+    ok "existing accounts detected and reset was declined — left as-is"
 fi
 
 step "Offline Wi-Fi access point ($WLAN: SSID '$SSID', $BAND_DESC)"
