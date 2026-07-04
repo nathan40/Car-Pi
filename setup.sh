@@ -549,12 +549,20 @@ if [[ "$RESET_APPS" == "yes" ]]; then
     rm -rf /srv/config/jellyfin /srv/config/audiobookshelf /srv/config/navidrome
     mkdir -p /srv/config/jellyfin /srv/config/navidrome /srv/config/audiobookshelf/{config,metadata}
     chown -R "$PUID:$PGID" /srv/config
-    ok "old app config deleted — the auto-admin step below will create fresh accounts"
+    ok "old app config deleted"
 fi
 
 step "Media containers (pulls images — the long part)"
 (cd /srv && docker compose pull)                       # grabs newer images on update runs
 (cd /srv && docker compose up -d --remove-orphans)     # recreates only what changed
+if [[ "$RESET_APPS" == "yes" ]]; then
+    # Deleting the bind-mounted config directories above doesn't change the
+    # container's own definition, so `up -d` just restarts the SAME container
+    # in place rather than making a new one — usually harmless (the app reads
+    # its state from that mount either way), but force a true recreate so a
+    # "reset" is unambiguously a clean slate, not a restart wearing a costume.
+    (cd /srv && docker compose up -d --force-recreate jellyfin audiobookshelf navidrome)
+fi
 (cd /srv && docker compose ps)
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
 
@@ -585,6 +593,34 @@ wait_for_http() {                     # wait_for_http URL LABEL
     return 1
 }
 
+wait_for_jellyfin_core_startup() {
+    # Jellyfin serves a temporary bootstrap server on :8096 while its real
+    # core init (ffmpeg detection, plugin loading, DB migration) is still
+    # running — that bootstrap server answers some endpoints (including the
+    # one wait_for_http polls) but 503s everything else, INCLUDING all of
+    # /Startup/*, until the real server takes over. The only fully reliable
+    # signal for that handoff is the "Core startup complete" line in the
+    # container's own log (source: Emby.Server.Implementations/ApplicationHost.cs),
+    # so watch for it directly instead of guessing from HTTP responses. This
+    # can legitimately take several minutes on a Pi 4's first boot.
+    local i logs
+    for ((i=0; i<150; i++)); do
+        logs="$(docker logs --tail 200 jellyfin 2>&1)"
+        if grep -q "Core startup complete" <<< "$logs"; then
+            return 0
+        fi
+        if grep -q "Failed to find valid ffmpeg" <<< "$logs"; then
+            warn "Jellyfin can't find a valid ffmpeg — this is a known failure mode where"
+            warn "its startup gate never completes. Check 'docker logs jellyfin' by hand."
+            return 1
+        fi
+        sleep 2
+    done
+    warn "Jellyfin's core startup didn't finish within 5 minutes — skipping its auto-admin"
+    warn "step (create it by hand once). Check 'docker logs jellyfin' if this keeps happening."
+    return 1
+}
+
 curl_retry() {                        # curl_retry [curl args...]
     # Wraps a single curl call with retries for the same transient
     # not-ready-yet errors wait_for_http guards against, so a call made
@@ -610,8 +646,11 @@ curl_retry() {                        # curl_retry [curl args...]
 CARPI_USER="admin"
 CARPI_PASS="carpi"
 
-# --- Jellyfin: Startup/* wizard API.
-if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
+# --- Jellyfin: Startup/* wizard API. /System/Info/Public alone isn't
+# enough — Jellyfin's own bootstrap server answers it before /Startup/* is
+# actually usable (see wait_for_jellyfin_core_startup above), so both gates
+# are needed.
+if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin" && wait_for_jellyfin_core_startup; then
     JF_DONE="$(curl_retry http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
     if [[ -z "$JF_DONE" ]]; then
         if curl_retry -X POST http://localhost:8096/Startup/Configuration \
