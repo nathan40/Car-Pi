@@ -565,31 +565,61 @@ step "Auto-creating admin accounts (no wizards to click through)"
 # so re-runs (update/reconfigure) just skip past the ones already done.
 
 wait_for_http() {                     # wait_for_http URL LABEL
-    local url="$1" label="$2" i
-    for ((i=0; i<60; i++)); do
-        curl -fsS -o /dev/null -m 3 "$url" && return 0
+    # linuxserver/lsio and node-based images (Jellyfin/Audiobookshelf) open
+    # their listening port well before the app inside is actually ready to
+    # answer, so an early request can get a connection reset, an empty
+    # reply, or a 500/503 instead of a clean response. Requiring several
+    # consecutive clean responses in a row (not just one lucky poll) avoids
+    # treating that half-up window as "ready".
+    local url="$1" label="$2" i streak=0
+    for ((i=0; i<90; i++)); do
+        if curl -fsS -o /dev/null -m 3 "$url" 2>/dev/null; then
+            streak=$((streak+1))
+            (( streak >= 3 )) && return 0
+        else
+            streak=0
+        fi
         sleep 2
     done
     warn "$label did not come up in time — skipping its auto-admin step (create it by hand once)."
     return 1
 }
 
+curl_retry() {                        # curl_retry [curl args...]
+    # Wraps a single curl call with retries for the same transient
+    # not-ready-yet errors wait_for_http guards against, so a call made
+    # right after the readiness check still can't crash the script on one
+    # bad response.
+    local i out
+    for ((i=0; i<10; i++)); do
+        if out="$(curl -fsS -m 10 "$@" 2>/dev/null)"; then
+            printf '%s' "$out"
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
 # --- Jellyfin: Startup/* wizard API. Blank passwords are rejected, so a
 # trivial fixed password is used; the user picker still needs one tap.
 if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
-    JF_DONE="$(curl -fsS -m 5 http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
+    JF_DONE="$(curl_retry http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
     if [[ -z "$JF_DONE" ]]; then
-        curl -fsS -X POST http://localhost:8096/Startup/Configuration \
-            -H "Content-Type: application/json" \
-            -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" >/dev/null
-        curl -fsS -X POST http://localhost:8096/Startup/User \
-            -H "Content-Type: application/json" \
-            -d '{"Name":"admin","Password":"carpi"}' >/dev/null
-        curl -fsS -X POST http://localhost:8096/Startup/RemoteAccess \
-            -H "Content-Type: application/json" \
-            -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null
-        curl -fsS -X POST http://localhost:8096/Startup/Complete >/dev/null
-        ok "Jellyfin admin created (user: admin, password: carpi)"
+        if curl_retry -X POST http://localhost:8096/Startup/Configuration \
+                -H "Content-Type: application/json" \
+                -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" >/dev/null \
+            && curl_retry -X POST http://localhost:8096/Startup/User \
+                -H "Content-Type: application/json" \
+                -d '{"Name":"admin","Password":"carpi"}' >/dev/null \
+            && curl_retry -X POST http://localhost:8096/Startup/RemoteAccess \
+                -H "Content-Type: application/json" \
+                -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null \
+            && curl_retry -X POST http://localhost:8096/Startup/Complete >/dev/null; then
+            ok "Jellyfin admin created (user: admin, password: carpi)"
+        else
+            warn "Jellyfin auto-admin setup failed after retries — create it by hand once, if needed."
+        fi
     else
         ok "Jellyfin already set up — left as-is"
     fi
@@ -597,28 +627,38 @@ fi
 
 # --- Audiobookshelf: /init accepts an empty password outright.
 if wait_for_http "http://localhost:13378/status" "Audiobookshelf"; then
-    ABS_INIT="$(curl -fsS -m 5 http://localhost:13378/status | grep -o '"isInit":true' || true)"
+    ABS_INIT="$(curl_retry http://localhost:13378/status | grep -o '"isInit":true' || true)"
     if [[ -z "$ABS_INIT" ]]; then
-        curl -fsS -X POST http://localhost:13378/init \
-            -H "Content-Type: application/json" \
-            -d '{"newRoot":{"username":"root","password":""}}' >/dev/null
-        ok "Audiobookshelf root created (user: root, no password)"
+        if curl_retry -X POST http://localhost:13378/init \
+                -H "Content-Type: application/json" \
+                -d '{"newRoot":{"username":"root","password":""}}' >/dev/null; then
+            ok "Audiobookshelf root created (user: root, no password)"
+        else
+            warn "Audiobookshelf auto-admin setup failed after retries — create it by hand once, if needed."
+        fi
     else
         ok "Audiobookshelf already set up — left as-is"
     fi
 fi
 
 # --- Navidrome: no pre-check endpoint exists; POST and treat "already has
-# an admin" (403) as success-and-skip rather than an error.
+# an admin" (403) as success-and-skip rather than an error. Retries on
+# anything other than a definitive 200/403, since a 500/503 this early
+# just means the app isn't fully up yet.
 if wait_for_http "http://localhost:4533" "Navidrome"; then
-    ND_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST http://localhost:4533/auth/createAdmin \
-        -H "Content-Type: application/json" -d '{"username":"admin","password":""}')"
+    ND_HTTP=""
+    for ((i=0; i<10; i++)); do
+        ND_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST http://localhost:4533/auth/createAdmin \
+            -H "Content-Type: application/json" -d '{"username":"admin","password":""}' 2>/dev/null || true)"
+        [[ "$ND_HTTP" == "200" || "$ND_HTTP" == "403" ]] && break
+        sleep 2
+    done
     if [[ "$ND_HTTP" == "200" ]]; then
         ok "Navidrome admin created (user: admin, no password)"
     elif [[ "$ND_HTTP" == "403" ]]; then
         ok "Navidrome already set up — left as-is"
     else
-        warn "Navidrome auto-admin call returned HTTP $ND_HTTP — create it by hand once if needed."
+        warn "Navidrome auto-admin call returned HTTP $ND_HTTP after retries — create it by hand once if needed."
     fi
 fi
 # Navidrome needs no library step: ND_SCANSCHEDULE already auto-scans /music.
@@ -630,18 +670,18 @@ step "Auto-creating libraries (movies/tv/audiobooks/podcasts)"
 # fallback as everywhere else here).
 
 # --- Jellyfin: needs an access token, then Library/VirtualFolders.
-JF_TOKEN="$(curl -fsS -m 5 -X POST http://localhost:8096/Users/AuthenticateByName \
+JF_TOKEN="$(curl_retry -X POST http://localhost:8096/Users/AuthenticateByName \
     -H 'Content-Type: application/json' \
     -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
-    -d '{"Username":"admin","Pw":"carpi"}' 2>/dev/null | jq -r '.AccessToken // empty' || true)"
+    -d '{"Username":"admin","Pw":"carpi"}' | jq -r '.AccessToken // empty' || true)"
 if [[ -n "$JF_TOKEN" ]]; then
     JF_AUTH="Authorization: MediaBrowser Client=\"car-pi-setup\", Device=\"car-pi-setup\", DeviceId=\"car-pi-setup\", Version=\"1.0.0\", Token=\"$JF_TOKEN\""
-    JF_EXISTING="$(curl -fsS -m 5 "http://localhost:8096/Library/VirtualFolders" -H "$JF_AUTH" || true)"
+    JF_EXISTING="$(curl_retry "http://localhost:8096/Library/VirtualFolders" -H "$JF_AUTH" || true)"
     add_jellyfin_library() {          # add_jellyfin_library NAME COLLECTIONTYPE PATH
         local name="$1" ctype="$2" path="$3"
         if jq -e --arg n "$name" '.[] | select(.Name==$n)' <<< "$JF_EXISTING" >/dev/null 2>&1; then
             ok "Jellyfin library '$name' already exists — left as-is"
-        elif curl -fsS -X POST "http://localhost:8096/Library/VirtualFolders?name=$(printf '%s' "$name" | jq -sRr @uri)&collectionType=$ctype&paths=$(printf '%s' "$path" | jq -sRr @uri)&refreshLibrary=false" \
+        elif curl_retry -X POST "http://localhost:8096/Library/VirtualFolders?name=$(printf '%s' "$name" | jq -sRr @uri)&collectionType=$ctype&paths=$(printf '%s' "$path" | jq -sRr @uri)&refreshLibrary=false" \
                 -H "$JF_AUTH" -H 'Content-Type: application/json' -d '{}' >/dev/null; then
             ok "Jellyfin library '$name' ($path) created"
         else
@@ -650,26 +690,26 @@ if [[ -n "$JF_TOKEN" ]]; then
     }
     add_jellyfin_library "Movies" "movies" "/data/movies"
     add_jellyfin_library "TV Shows" "tvshows" "/data/tvshows"
-    curl -fsS -X POST "http://localhost:8096/Library/Refresh" -H "$JF_AUTH" >/dev/null || true
+    curl_retry -X POST "http://localhost:8096/Library/Refresh" -H "$JF_AUTH" >/dev/null || true
 else
     warn "Couldn't log in to Jellyfin as admin/carpi — an existing admin account with a"
     warn "different password is likely already set up. Add libraries by hand once, if needed."
 fi
 
 # --- Audiobookshelf: needs a bearer token, then /api/libraries.
-ABS_TOKEN="$(curl -fsS -m 5 -X POST http://localhost:13378/login \
+ABS_TOKEN="$(curl_retry -X POST http://localhost:13378/login \
     -H 'Content-Type: application/json' \
-    -d '{"username":"root","password":""}' 2>/dev/null | jq -r '.user.accessToken // empty' || true)"
+    -d '{"username":"root","password":""}' | jq -r '.user.accessToken // empty' || true)"
 if [[ -n "$ABS_TOKEN" ]]; then
     ABS_AUTH="Authorization: Bearer $ABS_TOKEN"
-    ABS_EXISTING="$(curl -fsS -m 5 "http://localhost:13378/api/libraries" -H "$ABS_AUTH" || true)"
+    ABS_EXISTING="$(curl_retry "http://localhost:13378/api/libraries" -H "$ABS_AUTH" || true)"
     add_abs_library() {               # add_abs_library NAME MEDIATYPE PATH
         local name="$1" mtype="$2" path="$3" libid create_resp
         libid="$(jq -r --arg n "$name" '.libraries[] | select(.name==$n) | .id' <<< "$ABS_EXISTING" 2>/dev/null || true)"
         if [[ -n "$libid" ]]; then
             ok "Audiobookshelf library '$name' already exists — left as-is"
         else
-            create_resp="$(curl -fsS -X POST "http://localhost:13378/api/libraries" \
+            create_resp="$(curl_retry -X POST "http://localhost:13378/api/libraries" \
                 -H "$ABS_AUTH" -H 'Content-Type: application/json' \
                 -d "{\"name\":\"$name\",\"mediaType\":\"$mtype\",\"folders\":[{\"path\":\"$path\"}]}" || true)"
             libid="$(jq -r '.id // empty' <<< "$create_resp" 2>/dev/null || true)"
@@ -680,7 +720,7 @@ if [[ -n "$ABS_TOKEN" ]]; then
             fi
         fi
         if [[ -n "$libid" ]]; then
-            curl -fsS -X POST "http://localhost:13378/api/libraries/$libid/scan" -H "$ABS_AUTH" >/dev/null || true
+            curl_retry -X POST "http://localhost:13378/api/libraries/$libid/scan" -H "$ABS_AUTH" >/dev/null || true
         fi
     }
     add_abs_library "Audiobooks" "book" "/audiobooks"
