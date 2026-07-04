@@ -137,13 +137,13 @@ docker compose up -d
 docker compose ps      # all should be running
 ```
  
-`setup.sh` auto-creates the admin/root account **and** the media libraries for all three via each app's API (Jellyfin: user `admin` / password `carpi` — Jellyfin rejects a blank password — with libraries `Movies` (`/data/movies`) and `TV Shows` (`/data/tvshows`); Audiobookshelf: user `root`, no password, with libraries `Audiobooks` (`/audiobooks`) and `Podcasts` (`/podcasts`); Navidrome: user `admin`, no password, and no library step needed since `ND_SCANSCHEDULE` already auto-scans `/music`). This is deliberately insecure — fine for a box that's offline and only reachable on its own isolated car Wi-Fi. While you still have internet, log in to each once so it can fetch metadata:
+`setup.sh` auto-creates the admin account **and** the media libraries for all three via each app's API, using the **same login everywhere** (`admin` / `carpi` — Jellyfin rejects a blank password, so a shared non-blank password is used for all three rather than mixing blank and non-blank): Jellyfin gets libraries `Movies` (`/data/movies`) and `TV Shows` (`/data/tvshows`); Audiobookshelf gets `Audiobooks` (`/audiobooks`) and `Podcasts` (`/podcasts`); Navidrome gets an immediate scan of `/music` right after its admin account is created (via the Subsonic `startScan` endpoint), then continues on its normal `ND_SCANSCHEDULE` (hourly). This is deliberately insecure — fine for a box that's offline and only reachable on its own isolated car Wi-Fi. While you still have internet, log in to each once so it can fetch metadata:
  
 - **Jellyfin** → `http://<pi-url>:8096` — log in; libraries are already there.
 - **Audiobookshelf** → `http://<pi-url>:13378` — log in; libraries are already there.
-- **Navidrome** → `http://<pi-url>:4533` — log in; it auto-scans `/music`.
+- **Navidrome** → `http://<pi-url>:4533` — log in; `/music` has already been scanned.
 
-(If an admin account from before this feature existed is still in place with an unknown password, `setup.sh` can't log back in to add libraries automatically — it warns and you add them by hand once, same as a first-time install.)
+(If an admin account from before this feature existed is still in place with a different password, `setup.sh` can't log back in to add libraries/trigger a scan automatically — it warns and you do that step by hand once, same as a first-time install.)
 `restart: unless-stopped` brings everything back on every power-up.
  
 ### 3.5 Optional kid-friendly homepage

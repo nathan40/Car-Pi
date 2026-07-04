@@ -589,20 +589,28 @@ curl_retry() {                        # curl_retry [curl args...]
     # Wraps a single curl call with retries for the same transient
     # not-ready-yet errors wait_for_http guards against, so a call made
     # right after the readiness check still can't crash the script on one
-    # bad response.
-    local i out
+    # bad response. On final failure, prints curl's actual error to stderr
+    # (instead of swallowing it) so a real failure is diagnosable in the log
+    # instead of just "failed after retries".
+    local i out err
     for ((i=0; i<10; i++)); do
-        if out="$(curl -fsS -m 10 "$@" 2>/dev/null)"; then
+        if out="$(curl -fsS -m 10 "$@" 2>/tmp/curl_retry.err)"; then
             printf '%s' "$out"
             return 0
         fi
         sleep 2
     done
+    err="$(cat /tmp/curl_retry.err 2>/dev/null || true)"
+    echo "    (curl_retry gave up on: curl $* — last error: $err)" >&2
     return 1
 }
 
-# --- Jellyfin: Startup/* wizard API. Blank passwords are rejected, so a
-# trivial fixed password is used; the user picker still needs one tap.
+# One login for all three services — Jellyfin rejects a blank password, so
+# the same non-blank password is used everywhere for consistency.
+CARPI_USER="admin"
+CARPI_PASS="carpi"
+
+# --- Jellyfin: Startup/* wizard API.
 if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
     JF_DONE="$(curl_retry http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
     if [[ -z "$JF_DONE" ]]; then
@@ -611,28 +619,31 @@ if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
                 -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" >/dev/null \
             && curl_retry -X POST http://localhost:8096/Startup/User \
                 -H "Content-Type: application/json" \
-                -d '{"Name":"admin","Password":"carpi"}' >/dev/null \
+                -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}" >/dev/null \
             && curl_retry -X POST http://localhost:8096/Startup/RemoteAccess \
                 -H "Content-Type: application/json" \
                 -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null \
             && curl_retry -X POST http://localhost:8096/Startup/Complete >/dev/null; then
-            ok "Jellyfin admin created (user: admin, password: carpi)"
+            ok "Jellyfin admin created (user: $CARPI_USER, password: $CARPI_PASS)"
         else
-            warn "Jellyfin auto-admin setup failed after retries — create it by hand once, if needed."
+            warn "Jellyfin auto-admin setup failed after retries — see error above."
+            warn "Create it by hand once at :8096, or just re-run setup.sh (each Startup/* call"
+            warn "above is safe to repeat — Jellyfin ignores ones already done)."
         fi
     else
         ok "Jellyfin already set up — left as-is"
     fi
 fi
 
-# --- Audiobookshelf: /init accepts an empty password outright.
+# --- Audiobookshelf: /init's "newRoot" only means "the first/root user" —
+# username is whatever we pass, so it can match the shared login too.
 if wait_for_http "http://localhost:13378/status" "Audiobookshelf"; then
     ABS_INIT="$(curl_retry http://localhost:13378/status | grep -o '"isInit":true' || true)"
     if [[ -z "$ABS_INIT" ]]; then
         if curl_retry -X POST http://localhost:13378/init \
                 -H "Content-Type: application/json" \
-                -d '{"newRoot":{"username":"root","password":""}}' >/dev/null; then
-            ok "Audiobookshelf root created (user: root, no password)"
+                -d "{\"newRoot\":{\"username\":\"$CARPI_USER\",\"password\":\"$CARPI_PASS\"}}" >/dev/null; then
+            ok "Audiobookshelf admin created (user: $CARPI_USER, password: $CARPI_PASS)"
         else
             warn "Audiobookshelf auto-admin setup failed after retries — create it by hand once, if needed."
         fi
@@ -644,24 +655,41 @@ fi
 # --- Navidrome: no pre-check endpoint exists; POST and treat "already has
 # an admin" (403) as success-and-skip rather than an error. Retries on
 # anything other than a definitive 200/403, since a 500/503 this early
-# just means the app isn't fully up yet.
+# just means the app isn't fully up yet. The createAdmin response itself
+# carries a Subsonic token/salt good enough to kick off an immediate scan
+# of /music, rather than waiting for the hourly ND_SCANSCHEDULE.
 if wait_for_http "http://localhost:4533" "Navidrome"; then
-    ND_HTTP=""
+    ND_RESP=""; ND_HTTP=""
     for ((i=0; i<10; i++)); do
-        ND_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST http://localhost:4533/auth/createAdmin \
-            -H "Content-Type: application/json" -d '{"username":"admin","password":""}' 2>/dev/null || true)"
+        ND_RESP="$(curl -s -w '\n%{http_code}' -m 5 -X POST http://localhost:4533/auth/createAdmin \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"$CARPI_USER\",\"password\":\"$CARPI_PASS\"}" 2>/dev/null || true)"
+        ND_HTTP="$(tail -n1 <<< "$ND_RESP")"
         [[ "$ND_HTTP" == "200" || "$ND_HTTP" == "403" ]] && break
         sleep 2
     done
     if [[ "$ND_HTTP" == "200" ]]; then
-        ok "Navidrome admin created (user: admin, no password)"
+        ok "Navidrome admin created (user: $CARPI_USER, password: $CARPI_PASS)"
+        ND_BODY="$(sed '$d' <<< "$ND_RESP")"
+        ND_SALT="$(jq -r '.subsonicSalt // empty' <<< "$ND_BODY" 2>/dev/null || true)"
+        ND_TOKEN="$(jq -r '.subsonicToken // empty' <<< "$ND_BODY" 2>/dev/null || true)"
+        if [[ -n "$ND_SALT" && -n "$ND_TOKEN" ]]; then
+            if curl_retry -G "http://localhost:4533/rest/startScan" \
+                    --data-urlencode "u=$CARPI_USER" --data-urlencode "t=$ND_TOKEN" \
+                    --data-urlencode "s=$ND_SALT" --data-urlencode "v=1.16.1" \
+                    --data-urlencode "c=car-pi-setup" --data-urlencode "f=json" \
+                    --data-urlencode "fullScan=true" >/dev/null; then
+                ok "Navidrome music scan started (/music)"
+            else
+                warn "Couldn't trigger an immediate Navidrome scan — it'll pick up /music within ND_SCANSCHEDULE (1h) on its own."
+            fi
+        fi
     elif [[ "$ND_HTTP" == "403" ]]; then
         ok "Navidrome already set up — left as-is"
     else
         warn "Navidrome auto-admin call returned HTTP $ND_HTTP after retries — create it by hand once if needed."
     fi
 fi
-# Navidrome needs no library step: ND_SCANSCHEDULE already auto-scans /music.
 
 step "Auto-creating libraries (movies/tv/audiobooks/podcasts)"
 # Logs in with the fixed credentials above — if that fails, an admin from
@@ -673,7 +701,7 @@ step "Auto-creating libraries (movies/tv/audiobooks/podcasts)"
 JF_TOKEN="$(curl_retry -X POST http://localhost:8096/Users/AuthenticateByName \
     -H 'Content-Type: application/json' \
     -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
-    -d '{"Username":"admin","Pw":"carpi"}' | jq -r '.AccessToken // empty' || true)"
+    -d "{\"Username\":\"$CARPI_USER\",\"Pw\":\"$CARPI_PASS\"}" | jq -r '.AccessToken // empty' || true)"
 if [[ -n "$JF_TOKEN" ]]; then
     JF_AUTH="Authorization: MediaBrowser Client=\"car-pi-setup\", Device=\"car-pi-setup\", DeviceId=\"car-pi-setup\", Version=\"1.0.0\", Token=\"$JF_TOKEN\""
     JF_EXISTING="$(curl_retry "http://localhost:8096/Library/VirtualFolders" -H "$JF_AUTH" || true)"
@@ -692,14 +720,14 @@ if [[ -n "$JF_TOKEN" ]]; then
     add_jellyfin_library "TV Shows" "tvshows" "/data/tvshows"
     curl_retry -X POST "http://localhost:8096/Library/Refresh" -H "$JF_AUTH" >/dev/null || true
 else
-    warn "Couldn't log in to Jellyfin as admin/carpi — an existing admin account with a"
+    warn "Couldn't log in to Jellyfin as $CARPI_USER/$CARPI_PASS — an existing admin account with a"
     warn "different password is likely already set up. Add libraries by hand once, if needed."
 fi
 
 # --- Audiobookshelf: needs a bearer token, then /api/libraries.
 ABS_TOKEN="$(curl_retry -X POST http://localhost:13378/login \
     -H 'Content-Type: application/json' \
-    -d '{"username":"root","password":""}' | jq -r '.user.accessToken // empty' || true)"
+    -d "{\"username\":\"$CARPI_USER\",\"password\":\"$CARPI_PASS\"}" | jq -r '.user.accessToken // empty' || true)"
 if [[ -n "$ABS_TOKEN" ]]; then
     ABS_AUTH="Authorization: Bearer $ABS_TOKEN"
     ABS_EXISTING="$(curl_retry "http://localhost:13378/api/libraries" -H "$ABS_AUTH" || true)"
@@ -726,8 +754,8 @@ if [[ -n "$ABS_TOKEN" ]]; then
     add_abs_library "Audiobooks" "book" "/audiobooks"
     add_abs_library "Podcasts" "podcast" "/podcasts"
 else
-    warn "Couldn't log in to Audiobookshelf as root (no password) — an existing root account"
-    warn "with a different password is likely already set up. Add libraries by hand once, if needed."
+    warn "Couldn't log in to Audiobookshelf as $CARPI_USER/$CARPI_PASS — an existing account with a"
+    warn "different password is likely already set up. Add libraries by hand once, if needed."
 fi
 
 step "Offline Wi-Fi access point ($WLAN: SSID '$SSID', $BAND_DESC)"
@@ -957,15 +985,14 @@ ADMIN
   Restart apps:   cd /srv && docker compose restart
   Setup log:      $LOG_FILE
 
-LOGINS (auto-created — no setup wizards to click through)
-  Jellyfin ............ user: admin   password: carpi
-  Audiobookshelf ....... user: root    password: (none, just hit Enter)
-  Navidrome ............ user: admin   password: (none, just hit Enter)
+LOGINS (auto-created — no setup wizards to click through; same login
+everywhere for simplicity)
+  Jellyfin, Audiobookshelf, Navidrome ... user: admin   password: carpi
 
 LIBRARIES (auto-created too — point media in and go, no clicking required)
   Jellyfin ............ Movies (/data/movies), TV Shows (/data/tvshows)
   Audiobookshelf ....... Audiobooks (/audiobooks), Podcasts (/podcasts)
-  Navidrome ............ scans /music automatically (ND_SCANSCHEDULE)
+  Navidrome ............ /music scanned immediately, then hourly (ND_SCANSCHEDULE)
 
 STILL TO DO (one-time; do it over Ethernet while the Pi still has
 internet so metadata/artwork can download)
