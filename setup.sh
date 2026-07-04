@@ -595,29 +595,32 @@ wait_for_http() {                     # wait_for_http URL LABEL
 }
 
 wait_for_jellyfin_core_startup() {
-    # Jellyfin serves a temporary bootstrap server on :8096 while its real
-    # core init (ffmpeg detection, plugin loading, DB migration) is still
-    # running — that bootstrap server answers some endpoints (including the
-    # one wait_for_http polls) but 503s everything else, INCLUDING all of
-    # /Startup/*, until the real server takes over. The only fully reliable
-    # signal for that handoff is the "Core startup complete" line in the
-    # container's own log (source: Emby.Server.Implementations/ApplicationHost.cs),
-    # so watch for it directly instead of guessing from HTTP responses. This
-    # can legitimately take several minutes on a Pi 4's first boot.
-    local i logs
-    for ((i=0; i<150; i++)); do
-        logs="$(docker logs --tail 200 jellyfin 2>&1)"
-        if grep -q "Core startup complete" <<< "$logs"; then
-            return 0
-        fi
-        if grep -q "Failed to find valid ffmpeg" <<< "$logs"; then
+    # Jellyfin (10.11+) serves a temporary bootstrap server on :8096 while its
+    # real core init (DB migration, ffmpeg detection, plugin loading) is still
+    # running — that bootstrap server answers /System/Info/Public (always with
+    # StartupWizardCompleted:false, true or not) but 503s everything else,
+    # INCLUDING all of /Startup/*, until the real server takes over (source:
+    # Jellyfin.Server/ServerSetupApp/SetupServer.cs). So probe the endpoint
+    # this script actually needs: once GET /Startup/Configuration stops 503ing
+    # — 200 means the wizard is open, 401 means it was already completed — the
+    # real server is up. (Don't grep the container log for "Core startup
+    # complete" instead: on re-runs the container keeps running, that line has
+    # long scrolled out of any log tail, and the wait can never succeed.)
+    # First boot on a Pi 4 can legitimately take a while, so allow 10 minutes.
+    local i code
+    for ((i=0; i<300; i++)); do
+        code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://localhost:8096/Startup/Configuration 2>/dev/null || true)"
+        case "$code" in
+            2[0-9][0-9]|401|403) return 0 ;;
+        esac
+        if docker logs --tail 200 jellyfin 2>&1 | grep -q "Failed to find valid ffmpeg"; then
             warn "Jellyfin can't find a valid ffmpeg — this is a known failure mode where"
             warn "its startup gate never completes. Check 'docker logs jellyfin' by hand."
             return 1
         fi
         sleep 2
     done
-    warn "Jellyfin's core startup didn't finish within 5 minutes — skipping its auto-admin"
+    warn "Jellyfin's core startup didn't finish within 10 minutes — skipping its auto-admin"
     warn "step (create it by hand once). Check 'docker logs jellyfin' if this keeps happening."
     return 1
 }
