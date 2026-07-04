@@ -285,6 +285,19 @@ MEDIA_EXISTING="no"
 if grep -q '[[:space:]]/srv/media[[:space:]]' /etc/fstab 2>/dev/null; then MEDIA_EXISTING="yes"; fi
 
 # =================================================================== ask ====
+# Reset is asked fresh every run (never saved to setup.conf) on any EXISTING
+# install that actually has app config to wipe — not a persisted preference.
+RESET_APPS="no"
+if [[ "$MODE" != "fresh" ]] && { [[ -d /srv/config/jellyfin ]] || [[ -d /srv/config/audiobookshelf ]] || [[ -d /srv/config/navidrome ]]; }; then
+    echo
+    warn "Reset Jellyfin / Audiobookshelf / Navidrome to blank logins?"
+    warn "This DELETES each app's account, libraries, watch history, and scan"
+    warn "settings so it comes back up fresh with no-password auto-created admins"
+    warn "(same as a brand-new install). Libraries need re-adding afterward."
+    ask_yn "Reset all three apps now?" "N"
+    RESET_APPS="$REPLY_YN"
+fi
+
 MEDIA_DEV=""; MEDIA_FSTYPE=""; MEDIA_UUID=""
 if [[ "$MODE" == "update" ]]; then
     # Update mode: reuse every saved answer, ask nothing.
@@ -395,6 +408,9 @@ echo "  Pi address on its AP   : $PI_IP   (DHCP $DHCP_START-$DHCP_END)"
 echo "  Timezone               : $TIMEZONE"
 echo "  Service user           : $RUN_USER (uid $PUID)"
 echo "  Boot music volume      : $MUSIC_VOLUME"
+if [[ "$RESET_APPS" == "yes" ]]; then
+    echo "  ${RED}Reset apps             : YES — Jellyfin/Audiobookshelf/Navidrome config will be deleted${RST}"
+fi
 if [[ -n "$MEDIA_DEV" ]]; then
     echo "  Media storage          : $MEDIA_DEV ($MEDIA_FSTYPE) mounted at /srv/media"
 elif [[ "$MEDIA_EXISTING" == "yes" ]]; then
@@ -469,7 +485,7 @@ fi
 step "System update + packages (hostapd, dnsmasq, mpd, mpc, ...)"
 apt-get update
 apt-get "${APT_OPTS[@]}" full-upgrade
-apt-get "${APT_OPTS[@]}" install hostapd dnsmasq mpd mpc alsa-utils fake-hwclock avahi-daemon curl ca-certificates
+apt-get "${APT_OPTS[@]}" install hostapd dnsmasq mpd mpc alsa-utils fake-hwclock avahi-daemon curl ca-certificates jq
 if [[ "$MODE" == "fresh" ]]; then
     # keep the not-yet-configured daemons quiet during the first build; on an
     # already-installed box they stay up through the update
@@ -527,6 +543,15 @@ chown -R "$PUID:$PGID" /srv/homepage 2>/dev/null || true
 chown -R 33:33 /srv/config/arcade-state   # 33 = www-data inside php:8-apache (game shared state)
 ok "dashboard + $(find /srv/homepage/games -name '*.html' | wc -l) game files deployed (URLs use $LAN_NAME)"
 
+if [[ "$RESET_APPS" == "yes" ]]; then
+    step "Resetting Jellyfin / Audiobookshelf / Navidrome to blank logins"
+    (cd /srv && docker compose stop jellyfin audiobookshelf navidrome) 2>/dev/null || true
+    rm -rf /srv/config/jellyfin /srv/config/audiobookshelf /srv/config/navidrome
+    mkdir -p /srv/config/jellyfin /srv/config/navidrome /srv/config/audiobookshelf/{config,metadata}
+    chown -R "$PUID:$PGID" /srv/config
+    ok "old app config deleted — the auto-admin step below will create fresh accounts"
+fi
+
 step "Media containers (pulls images — the long part)"
 (cd /srv && docker compose pull)                       # grabs newer images on update runs
 (cd /srv && docker compose up -d --remove-orphans)     # recreates only what changed
@@ -564,7 +589,7 @@ if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
             -H "Content-Type: application/json" \
             -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null
         curl -fsS -X POST http://localhost:8096/Startup/Complete >/dev/null
-        ok "Jellyfin admin created (user: admin, password: carpi) — add libraries once: /data/movies, /data/tvshows"
+        ok "Jellyfin admin created (user: admin, password: carpi)"
     else
         ok "Jellyfin already set up — left as-is"
     fi
@@ -577,7 +602,7 @@ if wait_for_http "http://localhost:13378/status" "Audiobookshelf"; then
         curl -fsS -X POST http://localhost:13378/init \
             -H "Content-Type: application/json" \
             -d '{"newRoot":{"username":"root","password":""}}' >/dev/null
-        ok "Audiobookshelf root created (user: root, no password) — add libraries once: /audiobooks, /podcasts"
+        ok "Audiobookshelf root created (user: root, no password)"
     else
         ok "Audiobookshelf already set up — left as-is"
     fi
@@ -595,6 +620,74 @@ if wait_for_http "http://localhost:4533" "Navidrome"; then
     else
         warn "Navidrome auto-admin call returned HTTP $ND_HTTP — create it by hand once if needed."
     fi
+fi
+# Navidrome needs no library step: ND_SCANSCHEDULE already auto-scans /music.
+
+step "Auto-creating libraries (movies/tv/audiobooks/podcasts)"
+# Logs in with the fixed credentials above — if that fails, an admin from
+# before this feature existed is in place with an unknown password, so the
+# library step is skipped for that service (same "create it by hand once"
+# fallback as everywhere else here).
+
+# --- Jellyfin: needs an access token, then Library/VirtualFolders.
+JF_TOKEN="$(curl -fsS -m 5 -X POST http://localhost:8096/Users/AuthenticateByName \
+    -H 'Content-Type: application/json' \
+    -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
+    -d '{"Username":"admin","Pw":"carpi"}' 2>/dev/null | jq -r '.AccessToken // empty' || true)"
+if [[ -n "$JF_TOKEN" ]]; then
+    JF_AUTH="Authorization: MediaBrowser Client=\"car-pi-setup\", Device=\"car-pi-setup\", DeviceId=\"car-pi-setup\", Version=\"1.0.0\", Token=\"$JF_TOKEN\""
+    JF_EXISTING="$(curl -fsS -m 5 "http://localhost:8096/Library/VirtualFolders" -H "$JF_AUTH" || true)"
+    add_jellyfin_library() {          # add_jellyfin_library NAME COLLECTIONTYPE PATH
+        local name="$1" ctype="$2" path="$3"
+        if jq -e --arg n "$name" '.[] | select(.Name==$n)' <<< "$JF_EXISTING" >/dev/null 2>&1; then
+            ok "Jellyfin library '$name' already exists — left as-is"
+        elif curl -fsS -X POST "http://localhost:8096/Library/VirtualFolders?name=$(printf '%s' "$name" | jq -sRr @uri)&collectionType=$ctype&paths=$(printf '%s' "$path" | jq -sRr @uri)&refreshLibrary=false" \
+                -H "$JF_AUTH" -H 'Content-Type: application/json' -d '{}' >/dev/null; then
+            ok "Jellyfin library '$name' ($path) created"
+        else
+            warn "Could not create Jellyfin library '$name' — add it by hand once, if needed."
+        fi
+    }
+    add_jellyfin_library "Movies" "movies" "/data/movies"
+    add_jellyfin_library "TV Shows" "tvshows" "/data/tvshows"
+    curl -fsS -X POST "http://localhost:8096/Library/Refresh" -H "$JF_AUTH" >/dev/null || true
+else
+    warn "Couldn't log in to Jellyfin as admin/carpi — an existing admin account with a"
+    warn "different password is likely already set up. Add libraries by hand once, if needed."
+fi
+
+# --- Audiobookshelf: needs a bearer token, then /api/libraries.
+ABS_TOKEN="$(curl -fsS -m 5 -X POST http://localhost:13378/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"root","password":""}' 2>/dev/null | jq -r '.user.accessToken // empty' || true)"
+if [[ -n "$ABS_TOKEN" ]]; then
+    ABS_AUTH="Authorization: Bearer $ABS_TOKEN"
+    ABS_EXISTING="$(curl -fsS -m 5 "http://localhost:13378/api/libraries" -H "$ABS_AUTH" || true)"
+    add_abs_library() {               # add_abs_library NAME MEDIATYPE PATH
+        local name="$1" mtype="$2" path="$3" libid create_resp
+        libid="$(jq -r --arg n "$name" '.libraries[] | select(.name==$n) | .id' <<< "$ABS_EXISTING" 2>/dev/null || true)"
+        if [[ -n "$libid" ]]; then
+            ok "Audiobookshelf library '$name' already exists — left as-is"
+        else
+            create_resp="$(curl -fsS -X POST "http://localhost:13378/api/libraries" \
+                -H "$ABS_AUTH" -H 'Content-Type: application/json' \
+                -d "{\"name\":\"$name\",\"mediaType\":\"$mtype\",\"folders\":[{\"path\":\"$path\"}]}" || true)"
+            libid="$(jq -r '.id // empty' <<< "$create_resp" 2>/dev/null || true)"
+            if [[ -n "$libid" ]]; then
+                ok "Audiobookshelf library '$name' ($path) created"
+            else
+                warn "Could not create Audiobookshelf library '$name' — add it by hand once, if needed."
+            fi
+        fi
+        if [[ -n "$libid" ]]; then
+            curl -fsS -X POST "http://localhost:13378/api/libraries/$libid/scan" -H "$ABS_AUTH" >/dev/null || true
+        fi
+    }
+    add_abs_library "Audiobooks" "book" "/audiobooks"
+    add_abs_library "Podcasts" "podcast" "/podcasts"
+else
+    warn "Couldn't log in to Audiobookshelf as root (no password) — an existing root account"
+    warn "with a different password is likely already set up. Add libraries by hand once, if needed."
 fi
 
 step "Offline Wi-Fi access point ($WLAN: SSID '$SSID', $BAND_DESC)"
@@ -829,18 +922,17 @@ LOGINS (auto-created — no setup wizards to click through)
   Audiobookshelf ....... user: root    password: (none, just hit Enter)
   Navidrome ............ user: admin   password: (none, just hit Enter)
 
-STILL TO DO (one-time, in a browser; do it over Ethernet while the
-Pi still has internet so metadata/artwork can download)
-  1. Jellyfin  http://$DEVICE_NAME.local:8096 -> log in, add libraries
-     for /data/movies and /data/tvshows
-  2. Audiobookshelf  http://$DEVICE_NAME.local:13378 -> log in, add
-     libraries for /audiobooks and /podcasts
-  3. Navidrome  http://$DEVICE_NAME.local:4533 -> log in
-     (it scans /music automatically)
-  4. Copy media in (pre-encode video per guide Part 6):
+LIBRARIES (auto-created too — point media in and go, no clicking required)
+  Jellyfin ............ Movies (/data/movies), TV Shows (/data/tvshows)
+  Audiobookshelf ....... Audiobooks (/audiobooks), Podcasts (/podcasts)
+  Navidrome ............ scans /music automatically (ND_SCANSCHEDULE)
+
+STILL TO DO (one-time; do it over Ethernet while the Pi still has
+internet so metadata/artwork can download)
+  1. Copy media in (pre-encode video per guide Part 6):
        /srv/media/movies   /srv/media/tv   /srv/media/music
        /srv/media/audiobooks   /srv/media/podcasts
-  5. Hotel TV: install the Jellyfin app on a Fire TV / Google TV
+  2. Hotel TV: install the Jellyfin app on a Fire TV / Google TV
      stick at home and pre-join it to "$SSID" (guide Part 5).
 
 AFTER ADDING MUSIC LATER

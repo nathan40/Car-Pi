@@ -137,11 +137,13 @@ docker compose up -d
 docker compose ps      # all should be running
 ```
  
-`setup.sh` auto-creates the admin/root account for all three via each app's first-run API (Jellyfin: user `admin` / password `carpi` — Jellyfin rejects a blank password; Audiobookshelf: user `root`, no password; Navidrome: user `admin`, no password). This is deliberately insecure — fine for a box that's offline and only reachable on its own isolated car Wi-Fi. While you still have internet, log in to each once so it can fetch metadata and you can add libraries:
+`setup.sh` auto-creates the admin/root account **and** the media libraries for all three via each app's API (Jellyfin: user `admin` / password `carpi` — Jellyfin rejects a blank password — with libraries `Movies` (`/data/movies`) and `TV Shows` (`/data/tvshows`); Audiobookshelf: user `root`, no password, with libraries `Audiobooks` (`/audiobooks`) and `Podcasts` (`/podcasts`); Navidrome: user `admin`, no password, and no library step needed since `ND_SCANSCHEDULE` already auto-scans `/music`). This is deliberately insecure — fine for a box that's offline and only reachable on its own isolated car Wi-Fi. While you still have internet, log in to each once so it can fetch metadata:
  
-- **Jellyfin** → `http://<pi-url>:8096` — log in, add libraries for `/data/movies` and `/data/tvshows`.
-- **Audiobookshelf** → `http://<pi-url>:13378` — log in, add libraries for `/audiobooks` and `/podcasts`.
+- **Jellyfin** → `http://<pi-url>:8096` — log in; libraries are already there.
+- **Audiobookshelf** → `http://<pi-url>:13378` — log in; libraries are already there.
 - **Navidrome** → `http://<pi-url>:4533` — log in; it auto-scans `/music`.
+
+(If an admin account from before this feature existed is still in place with an unknown password, `setup.sh` can't log back in to add libraries automatically — it warns and you add them by hand once, same as a first-time install.)
 `restart: unless-stopped` brings everything back on every power-up.
  
 ### 3.5 Optional kid-friendly homepage
