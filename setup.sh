@@ -544,7 +544,7 @@ chown -R 33:33 /srv/config/arcade-state   # 33 = www-data inside php:8-apache (g
 ok "dashboard + $(find /srv/homepage/games -name '*.html' | wc -l) game files deployed (URLs use $LAN_NAME)"
 
 if [[ "$RESET_APPS" == "yes" ]]; then
-    step "Resetting Jellyfin / Audiobookshelf / Navidrome to blank logins"
+    step "Resetting Jellyfin / Audiobookshelf / Navidrome"
     (cd /srv && docker compose stop jellyfin audiobookshelf navidrome) 2>/dev/null || true
     rm -rf /srv/config/jellyfin /srv/config/audiobookshelf /srv/config/navidrome
     mkdir -p /srv/config/jellyfin /srv/config/navidrome /srv/config/audiobookshelf/{config,metadata}
@@ -567,7 +567,7 @@ fi
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
 
 if [[ "$MODE" == "fresh" || "$RESET_APPS" == "yes" ]]; then
-step "Auto-creating admin accounts (no wizards to click through)"
+step "Attempting to auto-create admin accounts for each app"
 # No security concern here — this box is offline, in the car, on its own
 # Wi-Fi. Every account below uses a blank or throwaway password so nobody
 # has to type anything on a phone/tablet screen; each call is idempotent
