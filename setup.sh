@@ -698,20 +698,91 @@ if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin" && wait_f
     if [[ -z "$JF_DONE" ]]; then
         if jf_startup_post Configuration \
                 -H "Content-Type: application/json" \
-                -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" \
-            && jf_startup_post User \
+                -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}"; then
+            # A background task inside Jellyfin 10.11 (unrelated to this
+            # wizard) races this same window: it calls UserManager, finds
+            # zero users, and auto-creates its own blank-password admin
+            # (username "abc", the linuxserver.io container's PUID account)
+            # before our POST below lands. When that happens /Startup/User
+            # 404s permanently (its "first user" guard no longer applies
+            # once ANY user exists) — not a transient failure, so retrying
+            # doesn't help. Since a working admin now exists either way,
+            # treat that 404 as "already handled" rather than an error.
+            JF_USER_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8096/Startup/User" \
                 -H "Content-Type: application/json" \
-                -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}" \
-            && jf_startup_post RemoteAccess \
-                -H "Content-Type: application/json" \
-                -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' \
-            && jf_startup_post Complete; then
-            ok "Jellyfin admin created (user: $CARPI_USER, password: $CARPI_PASS)"
+                -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}")"
+            if [[ "$JF_USER_HTTP" == "204" || "$JF_USER_HTTP" == "200" ]]; then
+                JF_ADMIN_MSG="Jellyfin admin created (user: $CARPI_USER, password: $CARPI_PASS)"
+            elif [[ "$JF_USER_HTTP" == "404" ]]; then
+                # The auto-created account (blank password) is a real, working
+                # admin — reclaim it as ours instead of leaving a second,
+                # inconsistent login lying around: authenticate as it (blank
+                # password), set its password, then rename it. Renaming is a
+                # generic "update user" endpoint (POST /Users?userId=..) rather
+                # than a dedicated rename call, so it's done last, after the
+                # password change, in case the DTO round-trip below fails
+                # partway — a password-set alone still leaves a usable login.
+                JF_EXISTING_USER="$(curl_retry http://localhost:8096/Startup/User | jq -r '.Name // empty' 2>/dev/null || true)"
+                JF_RECLAIM_TOKEN=""; JF_RECLAIM_ID=""
+                if [[ -n "$JF_EXISTING_USER" ]]; then
+                    JF_RECLAIM_AUTH_RESP="$(curl_retry -X POST http://localhost:8096/Users/AuthenticateByName \
+                        -H 'Content-Type: application/json' \
+                        -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
+                        -d "{\"Username\":\"$JF_EXISTING_USER\",\"Pw\":\"\"}" || true)"
+                    JF_RECLAIM_TOKEN="$(jq -r '.AccessToken // empty' <<< "$JF_RECLAIM_AUTH_RESP" 2>/dev/null || true)"
+                    JF_RECLAIM_ID="$(jq -r '.User.Id // empty' <<< "$JF_RECLAIM_AUTH_RESP" 2>/dev/null || true)"
+                fi
+                if [[ -n "$JF_RECLAIM_TOKEN" && -n "$JF_RECLAIM_ID" ]]; then
+                    JF_RECLAIM_AUTH="Authorization: MediaBrowser Client=\"car-pi-setup\", Device=\"car-pi-setup\", DeviceId=\"car-pi-setup\", Version=\"1.0.0\", Token=\"$JF_RECLAIM_TOKEN\""
+                    if curl_retry -X POST "http://localhost:8096/Users/Password?userId=$JF_RECLAIM_ID" \
+                            -H "$JF_RECLAIM_AUTH" -H 'Content-Type: application/json' \
+                            -d "{\"CurrentPw\":\"\",\"NewPw\":\"$CARPI_PASS\",\"ResetPassword\":false}" >/dev/null \
+                        && JF_RENAME_DTO="$(curl_retry "http://localhost:8096/Users/$JF_RECLAIM_ID" -H "$JF_RECLAIM_AUTH" | jq -c --arg n "$CARPI_USER" '.Name = $n')" \
+                        && curl_retry -X POST "http://localhost:8096/Users?userId=$JF_RECLAIM_ID" \
+                            -H "$JF_RECLAIM_AUTH" -H 'Content-Type: application/json' -d "$JF_RENAME_DTO" >/dev/null; then
+                        JF_ADMIN_MSG="Jellyfin's auto-created admin ($JF_EXISTING_USER) was renamed to $CARPI_USER and given the password $CARPI_PASS"
+                    else
+                        warn "Could not rename/repassword Jellyfin's auto-created admin ($JF_EXISTING_USER) — creating a separate $CARPI_USER/$CARPI_PASS admin instead."
+                    fi
+                else
+                    warn "Could not log in to Jellyfin's auto-created admin ($JF_EXISTING_USER) to reclaim it — creating a separate $CARPI_USER/$CARPI_PASS admin instead."
+                fi
+                if [[ -z "${JF_ADMIN_MSG:-}" ]]; then
+                    # Reclaim failed for some reason — fall back to a second,
+                    # independent admin account via the normal (non-Startup)
+                    # user-creation API, using the existing account's own
+                    # session (elevated: it's the server's only admin so far).
+                    JF_NEWADMIN_RESP="$(curl_retry -X POST "http://localhost:8096/Users/New" \
+                        -H "$JF_RECLAIM_AUTH" -H 'Content-Type: application/json' \
+                        -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}" 2>/dev/null || true)"
+                    JF_NEWADMIN_ID="$(jq -r '.Id // empty' <<< "$JF_NEWADMIN_RESP" 2>/dev/null || true)"
+                    if [[ -n "$JF_NEWADMIN_ID" ]] && curl_retry -X POST "http://localhost:8096/Users/$JF_NEWADMIN_ID/Policy" \
+                            -H "$JF_RECLAIM_AUTH" -H 'Content-Type: application/json' \
+                            -d '{"IsAdministrator":true,"IsHidden":false,"IsDisabled":false,"EnableRemoteControlOfOtherUsers":true,"EnableSharedDeviceControl":true,"EnableRemoteAccess":true,"EnableLiveTvManagement":true,"EnableLiveTvAccess":true,"EnableMediaPlayback":true,"EnableAudioPlaybackTranscoding":true,"EnableVideoPlaybackTranscoding":true,"EnablePlaybackRemuxing":true,"EnableContentDeletion":true,"EnableContentDownloading":true,"EnableSyncTranscoding":true,"EnableMediaConversion":true,"EnableAllDevices":true,"EnableAllChannels":true,"EnableAllFolders":true,"EnablePublicSharing":true}' >/dev/null; then
+                        JF_ADMIN_MSG="Jellyfin admin created (user: $CARPI_USER, password: $CARPI_PASS) alongside its own auto-created admin ($JF_EXISTING_USER, blank password)"
+                    else
+                        warn "Could not create a fallback $CARPI_USER admin either — the only working login is $JF_EXISTING_USER with a blank password."
+                    fi
+                fi
+            else
+                JF_ADMIN_MSG=""
+                warn "POST /Startup/User returned unexpected HTTP $JF_USER_HTTP"
+            fi
+            if [[ -n "$JF_ADMIN_MSG" ]] \
+                && jf_startup_post RemoteAccess \
+                    -H "Content-Type: application/json" \
+                    -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' \
+                && jf_startup_post Complete; then
+                ok "$JF_ADMIN_MSG"
+            else
+                warn "Jellyfin auto-admin setup failed after retries — the last 'POST /Startup/...'"
+                warn "line above is the call that failed. Create it by hand once at :8096, or just"
+                warn "re-run setup.sh (each Startup/* call is safe to repeat — Jellyfin ignores"
+                warn "ones already done)."
+                jf_diag
+            fi
         else
-            warn "Jellyfin auto-admin setup failed after retries — the last 'POST /Startup/...'"
-            warn "line above is the call that failed. Create it by hand once at :8096, or just"
-            warn "re-run setup.sh (each Startup/* call is safe to repeat — Jellyfin ignores"
-            warn "ones already done)."
+            warn "POST /Startup/Configuration failed after retries."
             jf_diag
         fi
     else
@@ -788,6 +859,15 @@ JF_TOKEN="$(curl_retry -X POST http://localhost:8096/Users/AuthenticateByName \
     -H 'Content-Type: application/json' \
     -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
     -d "{\"Username\":\"$CARPI_USER\",\"Pw\":\"$CARPI_PASS\"}" | jq -r '.AccessToken // empty' || true)"
+if [[ -z "$JF_TOKEN" && -n "${JF_EXISTING_USER:-}" && "$JF_EXISTING_USER" != "$CARPI_USER" ]]; then
+    # car-pi-setup's own admin/carpi user never got created (see the
+    # UserManager auto-seed race noted above) — fall back to whatever
+    # admin Jellyfin auto-created for itself, which uses a blank password.
+    JF_TOKEN="$(curl_retry -X POST http://localhost:8096/Users/AuthenticateByName \
+        -H 'Content-Type: application/json' \
+        -H 'Authorization: MediaBrowser Client="car-pi-setup", Device="car-pi-setup", DeviceId="car-pi-setup", Version="1.0.0"' \
+        -d "{\"Username\":\"$JF_EXISTING_USER\",\"Pw\":\"\"}" | jq -r '.AccessToken // empty' || true)"
+fi
 if [[ -n "$JF_TOKEN" ]]; then
     JF_AUTH="Authorization: MediaBrowser Client=\"car-pi-setup\", Device=\"car-pi-setup\", DeviceId=\"car-pi-setup\", Version=\"1.0.0\", Token=\"$JF_TOKEN\""
     JF_EXISTING="$(curl_retry "http://localhost:8096/Library/VirtualFolders" -H "$JF_AUTH" || true)"
@@ -806,8 +886,9 @@ if [[ -n "$JF_TOKEN" ]]; then
     add_jellyfin_library "TV Shows" "tvshows" "/data/tvshows"
     curl_retry -X POST "http://localhost:8096/Library/Refresh" -H "$JF_AUTH" >/dev/null || true
 else
-    warn "Couldn't log in to Jellyfin as $CARPI_USER/$CARPI_PASS — an existing admin account with a"
-    warn "different password is likely already set up. Add libraries by hand once, if needed."
+    warn "Couldn't log in to Jellyfin as $CARPI_USER/$CARPI_PASS${JF_EXISTING_USER:+ or $JF_EXISTING_USER (blank password)} —"
+    warn "an existing admin account with a different password is likely already set up."
+    warn "Add libraries by hand once, if needed."
 fi
 
 # --- Audiobookshelf: needs a bearer token, then /api/libraries.
