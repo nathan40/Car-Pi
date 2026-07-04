@@ -1,39 +1,40 @@
 # Raspberry Pi 4 — Offline Mobile Media Server (Master Build Guide)
  
-A self-contained, **fully offline** media box for road trips. It broadcasts its own Wi-Fi and serves three media apps to the kids' tablets (and optionally a hotel TV). No internet required once it's built.
+A self-contained, **fully offline** media box for road trips. It broadcasts its own Wi-Fi and serves media apps plus a kids' games arcade to the kids' tablets (and optionally a hotel TV). No internet required once it's built.
  
 - **Jellyfin** — video
 - **Audiobookshelf** — audiobooks & podcasts
 - **Navidrome** — music (Subsonic-compatible)
+- **Homepage** — Web dashboard, car-aux music player controls, a 12-game offline arcade, and a power-off button (Parts 9–10)
 ```
-                 ┌─────────────────────────────┐
-                 │  Raspberry Pi 4 (4GB)        │
-   Boys' tablets │   • Jellyfin        :8096    │
-       ●   ●  ───┤   • Audiobookshelf  :13378   │
-   (+ hotel TV)  │   • Navidrome       :4533    │
-                 │   • Homepage        :80 (opt)│
-                 │                              │
-                 │  Built-in Wi-Fi (wlan0)     │
-                 │   = access point "RoadTrip"  │
-                 │   5GHz, 192.168.4.1          │
-                 └─────────────────────────────┘
-   USB Wi-Fi adapter: NOT used in this offline design — leave it unplugged.
+                   ┌──────────────────────────────┐
+                   │  Raspberry Pi 4 (4GB)        │
+   kids' tablets   │   • Jellyfin        :8096    │
+       ●   ●  ─────┤   • Audiobookshelf  :13378   │
+(+ media devices)  │   • Navidrome       :4533    │
+                   │   • Homepage        :80      │
+                   │                              │
+                   │  Built-in Wi-Fi (wlan0)      │
+                   │   = access point "RoadTrip"  │
+                   │   5GHz, 192.168.4.1          │
+                   └──────────────────────────────┘
 ```
  
 > **Important sequencing:** the *build* needs internet (apt updates, Docker install, pulling the app images, first-run metadata). Do all of that **over Ethernet** if you can — that way configuring the built-in Wi-Fi as an access point later won't cut off your connection mid-setup. After it's built, it runs with no internet at all.
  
 **Quick reference**
- 
-| Thing | Value |
-|---|---|
-| Pi address (on its own Wi-Fi) | `192.168.4.1` |
-| Jellyfin | `http://192.168.4.1:8096` |
-| Audiobookshelf | `http://192.168.4.1:13378` |
-| Navidrome | `http://192.168.4.1:4533` |
-| Homepage (optional) | `http://192.168.4.1` |
-| Wi-Fi network | SSID `RoadTrip`, 5GHz channel 36 |
-| Tablet DHCP range | `192.168.4.10`–`192.168.4.50` |
- 
+
+Pi address (on its own Wi-Fi)   `192.168.4.1`
+Pi URL (on its own Wi-Fi)       `media.lan`
+Jellyfin                        `http://media.lan:8096`
+Audiobookshelf                  `http://media.lan:13378`
+Navidrome                       `http://media.lan:4533`
+Homepage                        `http://media.lan`
+Games arcade                    `http://media.lan/games/` (12 games, alphabetized by kids as they're added)
+Music control API               `http://media.lan:8088` (Part 9)
+Shutdown button API              `http://media.lan:8097` (Part 10)
+Wi-Fi network                   SSID `RoadTrip`, 5GHz channel 36
+Tablet DHCP range               `192.168.4.100`–`192.168.4.200`
 ---
  
 ## Hardware
@@ -64,6 +65,7 @@ Before writing, open **Imager's gear / advanced options** (Ctrl+Shift+X) and set
 - **Username & password** — note these; examples below assume user `pi` (adjust `PUID`/paths if different)
 - **Set Wireless LAN country** — required, or Wi-Fi stays disabled
 - (Optional) home Wi-Fi, only if you can't use Ethernet for setup
+
 ### 1.3 First boot
  
 SSH in (over Ethernet ideally):
@@ -82,7 +84,7 @@ sudo reboot
 ```
  
 ---
- 
+
 ## Part 2 — Identify the Wi-Fi interfaces
  
 ```bash
@@ -123,64 +125,9 @@ sudo chown -R 1000:1000 /srv      # match your user; check with: id
 ```bash
 nano /srv/docker-compose.yml
 ```
- 
-```yaml
-services:
-  jellyfin:
-    image: lscr.io/linuxserver/jellyfin:latest
-    container_name: jellyfin
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=America/New_York
-    volumes:
-      - /srv/config/jellyfin:/config
-      - /srv/media/movies:/data/movies
-      - /srv/media/tv:/data/tvshows
-    ports:
-      - "8096:8096"
-    restart: unless-stopped
- 
-  audiobookshelf:
-    image: ghcr.io/advplyr/audiobookshelf:latest
-    container_name: audiobookshelf
-    environment:
-      - TZ=America/New_York
-    volumes:
-      - /srv/config/audiobookshelf/config:/config
-      - /srv/config/audiobookshelf/metadata:/metadata
-      - /srv/media/audiobooks:/audiobooks
-      - /srv/media/podcasts:/podcasts
-    ports:
-      - "13378:80"
-    restart: unless-stopped
- 
-  navidrome:
-    image: deluan/navidrome:latest
-    container_name: navidrome
-    user: "1000:1000"
-    environment:
-      - ND_SCANSCHEDULE=1h
-      - ND_LOGLEVEL=info
-      - ND_SESSIONTIMEOUT=24h
-      - TZ=America/New_York
-    volumes:
-      - /srv/config/navidrome:/data
-      - /srv/media/music:/music:ro
-    ports:
-      - "4533:4533"
-    restart: unless-stopped
- 
-  # OPTIONAL one-tap landing page for the kids (see 3.5)
-  homepage:
-    image: nginx:alpine
-    container_name: homepage
-    volumes:
-      - /srv/homepage:/usr/share/nginx/html:ro
-    ports:
-      - "80:80"
-    restart: unless-stopped
-```
+see docker-compose.yml file in folder
+
+Four services: `jellyfin`, `audiobookshelf`, `navidrome`, and `homepage` (`php:8-apache`, serves the dashboard + games arcade on port 80). `homepage` mounts `/srv/homepage` read-only at the web root, plus a second, **writable** mount at `/srv/homepage/bingo` → `/var/www/state` for the Car Bingo game's shared state (Part 10) — create that folder before first `up`, see §3.5.
  
 ### 3.4 Start and do first-run setup
  
@@ -192,9 +139,9 @@ docker compose ps      # all should be running
  
 While you still have internet, set each one up so it can fetch metadata:
  
-- **Jellyfin** → `http://<pi-ip>:8096` — create admin, add libraries for `/data/movies` and `/data/tvshows`.
-- **Audiobookshelf** → `http://<pi-ip>:13378` — create admin, add libraries for `/audiobooks` and `/podcasts`.
-- **Navidrome** → `http://<pi-ip>:4533` — create admin; it auto-scans `/music`.
+- **Jellyfin** → `http://<pi-url>:8096` — create admin, add libraries for `/data/movies` and `/data/tvshows`.
+- **Audiobookshelf** → `http://<pi-url>:13378` — create admin, add libraries for `/audiobooks` and `/podcasts`.
+- **Navidrome** → `http://<pi-url>:4533` — create admin; it auto-scans `/music`.
 `restart: unless-stopped` brings everything back on every power-up.
  
 ### 3.5 Optional kid-friendly homepage
@@ -202,41 +149,16 @@ While you still have internet, set each one up so it can fetch metadata:
 ```bash
 nano /srv/homepage/index.html
 ```
+see updated html file in homepage/index.html
  
-```html
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Road Trip Media</title>
-<style>
-  :root { color-scheme: dark; }
-  body { margin:0; min-height:100vh; display:flex; flex-direction:column;
-         align-items:center; justify-content:center; gap:1.5rem;
-         font-family: system-ui, sans-serif; background:#0f1320; color:#fff; padding:2rem; }
-  h1 { font-size:1.6rem; opacity:.85; margin:0 0 .5rem; }
-  .grid { display:grid; gap:1.25rem; width:100%; max-width:480px; }
-  a.card { display:flex; align-items:center; gap:1rem; text-decoration:none;
-           padding:1.4rem 1.6rem; border-radius:1rem; color:#fff;
-           font-size:1.35rem; font-weight:600; transition:transform .08s ease; }
-  a.card:active { transform:scale(.97); }
-  .video { background:#5a4fff; } .books { background:#1f8f6f; } .music { background:#c2563b; }
-  .emoji { font-size:1.8rem; }
-</style>
-</head>
-<body>
-  <h1>What do you want to do?</h1>
-  <div class="grid">
-    <a class="card video" href="http://192.168.4.1:8096"><span class="emoji">🎬</span> Watch (Jellyfin)</a>
-    <a class="card books" href="http://192.168.4.1:13378"><span class="emoji">🎧</span> Audiobooks</a>
-    <a class="card music" href="http://192.168.4.1:4533"><span class="emoji">🎵</span> Music</a>
-  </div>
-</body>
-</html>
+`http://media.lan` now shows three big buttons (a fourth, **Games**, and a power-off button are added in Part 10; the music player panel is added in Part 9).
+
+Create the writable bingo-state folder mentioned in §3.3 now, so `docker compose up -d` doesn't fail on a missing path:
+
+```bash
+sudo mkdir -p /srv/homepage/bingo
+sudo chown -R 33:33 /srv/homepage/bingo   # 33 = www-data inside the php:8-apache image
 ```
- 
-`http://192.168.4.1` now shows three big buttons.
  
 ---
  
@@ -333,7 +255,7 @@ Notes:
 sudo tee /etc/dnsmasq.d/ap.conf >/dev/null <<'EOF'
 interface=wlan0
 bind-dynamic
-dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,24h
+dhcp-range=192.168.4.100,192.168.4.200,255.255.255.0,24h
 dhcp-option=option:router,192.168.4.1
 dhcp-option=option:dns-server,192.168.4.1
 domain-needed
@@ -372,7 +294,7 @@ Tablets should now see **RoadTrip**, connect, get a `192.168.4.x` address, and r
  
 1. Set it up on **home Wi-Fi** and install **Jellyfin** (and optionally VLC) while you have internet.
 2. With the Pi powered on nearby, add the **RoadTrip** network to the device's Wi-Fi list (accept the "no internet" warning).
-3. At the hotel it auto-joins RoadTrip; open Jellyfin → `http://192.168.4.1:8096`. It streams straight from the Pi — no casting, no internet.
+3. At the hotel it auto-joins RoadTrip; open Jellyfin → `http://media.lan:8096`. It streams straight from the Pi — no casting, no internet.
 **Fallback trick** for a stubborn device that won't join a no-internet network: set the Pi's AP SSID/password to **match the home network you set the device up on**, so it auto-joins thinking it's home.
  
 **Simplest fallback of all:** an HDMI cable from a tablet with video-out, or just watch on the tablets. Worth keeping one in the bag.
@@ -465,13 +387,439 @@ Notes:
  
 - **Tablets:** join Wi-Fi **RoadTrip**, then use the apps. Works in the car with zero internet.
 - **Best experience = native apps**, each pointed at the Pi:
-  - Jellyfin app (or Findroid) → `http://192.168.4.1:8096`
-  - Audiobookshelf app → `http://192.168.4.1:13378`
-  - Any Subsonic client (Symfonium, Substreamer, DSub) → `http://192.168.4.1:4533`
-- **Administering the Pi:** SSH over Ethernet, or connect a device to RoadTrip and `ssh pi@192.168.4.1`.
+  - Jellyfin app (or Findroid) → `http://media.lan:8096`
+  - Audiobookshelf app → `http://media.lan:13378`
+  - Any Subsonic client (Symfonium, Substreamer, DSub) → `http://media.lan:4533`
+- **Administering the Pi:** SSH over Ethernet, or connect a device to RoadTrip and `ssh pi@media.lan`.
 - **Restart services:** `cd /srv && docker compose restart` (or a single one, e.g. `... restart jellyfin`).
 ---
- 
+
+## Part 9 — Auto-shuffle music to the car aux + web control
+
+Play your music library out the Pi's **3.5mm aux jack** into the car stereo. It starts automatically on power-up, gives every track a **fresh random order on every boot**, plays straight through that order (so nothing repeats until the whole library has played), and the kids get a few big buttons on the existing landing page.
+
+This is separate from the per-tablet music: the **Music (Navidrome)** card still streams to headphones/tablets, while this aux stream drives the **car speakers**. MPD reads the same `/srv/media/music` folder Navidrome uses (both read-only), so they run at the same time without conflict.
+
+> **Sequencing:** Step 1 needs internet (it installs packages) — do it over Ethernet like the rest of the build. Everything after that is offline. Run the steps top to bottom; the only reboot is at the very end (Step 10).
+
+### What this changes on the Pi
+
+- **Installs:** `mpd`, `mpc`
+- **New files:**
+  - `/etc/mpd.conf` (original backed up to `/etc/mpd.conf.bak`)
+  - `/usr/local/bin/car-music-start.sh`
+  - `/etc/systemd/system/car-music-start.service`
+  - `/srv/car-music-web.py`
+  - `/etc/systemd/system/car-music-web.service`
+  - `/srv/homepage/index.html` (replaces the one from §3.5)
+- **New services (enabled at boot):** `mpd`, `car-music-start`, `car-music-web`
+- **Ensures** `dtparam=audio=on` in `/boot/firmware/config.txt`
+
+### New quick reference
+
+| Thing | Value |
+|---|---|
+| Car audio out | Pi 4 onboard **3.5mm aux jack** |
+| Music engine | **MPD** on the host, `localhost:6600` |
+| Web control API | `http://192.168.4.1:8088` |
+| Player controls | on the homepage at `http://192.168.4.1` |
+
+---
+
+### Step 1 — Install MPD and the CLI client *(needs internet)*
+
+```bash
+sudo apt update
+sudo apt install -y mpd mpc        # mpd = player daemon, mpc = CLI client
+sudo systemctl stop mpd
+```
+
+### Step 2 — Make sure the analog audio device is enabled
+
+Pi OS **Lite** has no desktop audio server, so MPD talks straight to ALSA. This makes sure the onboard DAC is on (takes effect at the Step 10 reboot):
+
+```bash
+grep -q '^dtparam=audio=on' /boot/firmware/config.txt \
+  || echo 'dtparam=audio=on' | sudo tee -a /boot/firmware/config.txt
+```
+
+### Step 3 — Point MPD at the aux jack
+
+```bash
+sudo cp /etc/mpd.conf /etc/mpd.conf.bak
+sudo tee /etc/mpd.conf >/dev/null <<'EOF'
+music_directory     "/srv/media/music"
+playlist_directory  "/var/lib/mpd/playlists"
+db_file             "/var/lib/mpd/tag_cache"
+state_file          "/var/lib/mpd/state"
+sticker_file        "/var/lib/mpd/sticker.sql"
+
+bind_to_address     "localhost"      # control API runs on the host; localhost is enough
+port                "6600"
+
+auto_update         "no"             # we scan at boot + on demand instead of watching files
+restore_paused      "no"
+
+audio_output {
+    type        "alsa"
+    name        "Aux jack"
+    device      "plughw:CARD=Headphones"   # 'plug' prefix handles resampling
+    mixer_type  "software"                  # lets the web buttons set volume reliably
+}
+EOF
+```
+
+### Step 4 — Make the music library readable by MPD
+
+MPD runs as user `mpd`; this guarantees it can read your files no matter how they were copied in:
+
+```bash
+sudo chmod -R a+rX /srv/media/music
+```
+
+### Step 5 — Boot script: fresh shuffle every start
+
+```bash
+sudo tee /usr/local/bin/car-music-start.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+# Build the queue, give it a fresh shuffle on EVERY start, loop forever, and play.
+set -e
+mpc -q clear
+mpc -q update --wait      # refresh DB (slow only on first boot / after adding music)
+mpc -q add /              # queue every track in natural order
+mpc -q shuffle            # ONE fresh random order — re-runs on every boot/restart
+mpc -q random off         # play straight through that order (no early repeats)
+mpc -q repeat on          # loop the queue when it reaches the end
+mpc -q volume 80          # sane default level; car knob + buttons adjust from here
+mpc -q play
+EOF
+sudo chmod +x /usr/local/bin/car-music-start.sh
+```
+
+### Step 6 — Service to run that script at boot
+
+```bash
+sudo tee /etc/systemd/system/car-music-start.service >/dev/null <<'EOF'
+[Unit]
+Description=Shuffle-play the whole library on boot (aux jack)
+After=mpd.service
+Requires=mpd.service
+RequiresMountsFor=/srv/media/music
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/local/bin/car-music-start.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### Step 7 — Web control API and its service
+
+The control server is ~30 lines of Python (stdlib only — nothing to install). It only ever runs a fixed set of `mpc` commands, so no user input reaches the shell.
+
+```bash
+sudo tee /srv/car-music-web.py >/dev/null <<'EOF'
+#!/usr/bin/env python3
+# car-music-web.py — minimal MPD control API for the kids' landing page.
+# Serves JSON on :8088 and drives MPD on localhost:6600 via the `mpc` CLI.
+import json
+import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+def mpc(*args):
+    return subprocess.run(["mpc", *args], capture_output=True, text=True).stdout.strip()
+
+def status():
+    now = mpc("current")            # "Artist - Title"  ("" when stopped)
+    raw = mpc("status")             # multiline status block
+    state = ("playing" if "[playing]" in raw else
+             "paused"  if "[paused]"  in raw else "stopped")
+    volume = ""
+    for line in raw.splitlines():
+        if "volume:" in line:
+            volume = line.split("volume:")[1].split()[0]   # e.g. "80%"
+            break
+    return {"state": state, "now": now, "volume": volume}
+
+def handle(path):
+    if   path == "/toggle":  mpc("toggle")
+    elif path == "/next":    mpc("next")
+    elif path == "/prev":    mpc("prev")
+    elif path == "/volup":   mpc("volume", "+5")
+    elif path == "/voldown": mpc("volume", "-5")
+    elif path != "/status":  return None
+    return status()
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        result = handle(self.path.split("?")[0])
+        body = json.dumps(result if result is not None else {"error": "not found"}).encode()
+        self.send_response(200 if result is not None else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")   # page is on :80, API on :8088
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *_):   # stay quiet in the journal
+        pass
+
+if __name__ == "__main__":
+    ThreadingHTTPServer(("0.0.0.0", 8088), Handler).serve_forever()
+EOF
+```
+
+```bash
+sudo tee /etc/systemd/system/car-music-web.service >/dev/null <<'EOF'
+[Unit]
+Description=Web music control API (MPD bridge)
+After=mpd.service
+Wants=mpd.service
+
+[Service]
+ExecStart=/usr/bin/python3 /srv/car-music-web.py
+Restart=always
+RestartSec=3
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+> If your Pi username isn't `pi`, change `User=pi` above to match.
+
+### Step 8 — Enable everything (starts at the Step 10 reboot)
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl disable --now mpd.socket 2>/dev/null || true   # avoid socket overriding the bind address
+sudo systemctl enable mpd.service car-music-start.service car-music-web.service
+```
+
+### Step 9 — Add the player to the homepage
+
+This replaces the `index.html` from **§3.5** — it keeps your app cards and adds a player panel underneath. It's bind-mounted into the Apache container, so saving the file is enough; no container restart needed.
+
+```bash
+nano /srv/homepage/index.html
+```
+see updated file in homepage/index.html 
+
+The panel shows the current track and refreshes every few seconds. The buttons control the **car-speaker** stream; the volume buttons nudge MPD's digital level ±5 (the car's own knob stays the main control).
+
+### Step 10 — Reboot and verify
+
+```bash
+sudo reboot
+```
+
+After it comes back up — with the aux cable plugged into the car (or a test speaker):
+
+1. Music should be **playing out the aux jack on its own**, no login.
+2. On a tablet joined to **RoadTrip**, open `http://media.lan` — the player panel shows the current song and the buttons skip / pause / adjust volume.
+
+Health checks if anything looks off:
+
+```bash
+systemctl status mpd car-music-start car-music-web --no-pager
+mpc status                         # shows the track, random: off, repeat: on
+curl -s localhost:8088/status      # -> {"state":"playing","now":"...","volume":"80%"}
+```
+
+> **First boot is slower:** `mpc update --wait` builds the library database the first time, so there's a short delay before the first track on the very first boot only. Subsequent boots are quick.
+
+---
+
+### Adding music later
+
+Drop files into `/srv/media/music`, then either reboot, or without rebooting:
+
+```bash
+sudo chmod -R a+rX /srv/media/music   # keep new files readable by MPD
+mpc update --wait
+sudo systemctl restart car-music-start    # re-queue + fresh shuffle including the new tracks
+```
+
+Navidrome picks up the same new files on its own schedule (per §3.3).
+
+### How the shuffle behaves (and a note on "random")
+
+`mpc shuffle` physically reorders the queue, so you get a **brand-new order every boot or restart**, regardless of saved state. Because playback then runs straight through that order (`random off`) and only loops at the end (`repeat on`), **no song repeats until the entire library has played once**. The only way to hear a repeat is to drive longer than your whole library is long — hours and hours — and even then it replays the same shuffled order rather than picking favourites. This avoids the "same song keeps coming up" feel of roll-the-dice random.
+
+If you ever wanted it to reshuffle *again* after each complete pass (instead of looping the same order), swap the two lines in `car-music-start.sh` to `mpc -q random on` and drop the `mpc -q shuffle` line. For a road trip, the version above is the better fit.
+
+### Troubleshooting (Part 9)
+
+- **No sound at all:** confirm `aplay -l` lists the **Headphones** card and that `/boot/firmware/config.txt` has `dtparam=audio=on` (reboot if you just added it). Check MPD's output is enabled: `mpc outputs` → if it shows disabled, `mpc enable 1`.
+- **Sound goes out HDMI, not the jack:** set `device` in `/etc/mpd.conf` to the exact card name from `aplay -l`, then `sudo systemctl restart mpd`.
+- **Library looks empty / `add /` queues nothing:** `mpc update --wait`, then `mpc add /`. If still empty, it's a permissions issue: `sudo chmod -R a+rX /srv/media/music` and update again.
+- **Player panel says "(music control offline)":** on the Pi, `curl -s localhost:8088/status` and `systemctl status car-music-web`. Make sure `User=` in the service matches a real user.
+- **Volume buttons do nothing:** confirm `mixer_type "software"` is in `/etc/mpd.conf`, then `sudo systemctl restart mpd`.
+- **Want native phone control too:** add a second `bind_to_address "192.168.4.1"` line to `/etc/mpd.conf`, restart MPD, and point any MPD client at `192.168.4.1:6600`.
+
+---
+
+## Part 10 — Games arcade + dashboard power-off button
+
+Two more additions on top of the homepage from Parts 3 and 9: a **Games** tile leading to a 12-game offline arcade, and a subtle **power-off button** on the dashboard so the kids (or a hotel room) can shut the Pi down safely without SSH.
+
+### What this changes on the Pi
+
+- **New files:**
+  - `/srv/homepage/games/` — one self-contained `.html` per game, plus `games/index.html` (the arcade hub) and `games/bingo/` (`bingo.html` + `bingo-api.php`)
+  - `/srv/shutdown-server.py`
+  - `/etc/systemd/system/shutdown-server.service`
+  - `/srv/homepage/index.html` (adds the **Games** card and the power button; replaces the one from Part 9)
+- **New service (enabled at boot):** `shutdown-server`
+- **Uses the existing** `/srv/homepage/bingo` → `/var/www/state` mount from §3.3/§3.5 (no new volume)
+
+### New quick reference
+
+| Thing | Value |
+|---|---|
+| Games hub | `http://media.lan/games/` |
+| Shutdown API | `http://192.168.4.1:8097` (`GET /` = health check, `POST /shutdown` = power off) |
+| Games state (Bingo) | `/srv/homepage/bingo/bingo.json`, mounted read/write into the `homepage` container at `/var/www/state` |
+
+### 10.1 The games hub
+
+`games/index.html` is a grid of 12 tiles, each linking to one self-contained game file — no build step, no shared JS engine, just static HTML/CSS/JS served by the existing `homepage` (`php:8-apache`) container:
+
+| Tile | File | Notes |
+|---|---|---|
+| 🫧 Bubbles | `bubbles.html` | |
+| 🎆 Fireworks | `fireworks.html` | |
+| 🎵 Xylophone | `xylophone.html` | |
+| 🐶 Animal Sounds | `animals.html` | |
+| 🖍️ Paint | `paint.html` | |
+| 👾 Feed Me! | `monster.html` | |
+| 🐹 Bonk! | `whack.html` | |
+| 🔷 Shapes | `shapes.html` | |
+| 🚗 Vroom! | `racer.html` | |
+| 🃏 Memory | `memory.html` | |
+| 🚌 Car Bingo | `bingo/bingo.html` + `bingo/bingo-api.php` | the only game with server-side shared state |
+| 🔤 Spell It! | `words.html` | |
+
+```bash
+sudo mkdir -p /srv/homepage/games/bingo
+# copy each game .html into /srv/homepage/games/, index.html into /srv/homepage/games/,
+# and bingo.html + bingo-api.php into /srv/homepage/games/bingo/
+```
+
+Everything under `/srv/homepage` is served read-only (per the `homepage` service's `:ro` mount in §3.3), so no extra permissions are needed for the static game files themselves.
+
+**Car Bingo's shared state.** `bingo-api.php` is a small stdlib-only PHP API (`state | claim | mark | newgame | reset`) that deals a 4×16 tile "Minnesota road trip" card per player and tracks marks/wins in a flock-locked JSON file at `/var/www/state/bingo.json` — i.e. the `/srv/homepage/bingo` folder created in §3.5. Up to 4 tablets can claim a player slot and mark tiles independently; the server itself detects bingo lines (4 rows, 4 columns, 2 diagonals) so kids can't fudge a win. The tile pool (deer, tractors, rest stops, etc.) is a plain PHP array at the top of the file — edit it to match wherever you're actually driving.
+
+### 10.2 Dashboard power-off button
+
+`shutdown-server.py` is a ~35-line stdlib Python service, run **as root** by systemd so it can actually halt the host:
+
+```bash
+sudo tee /srv/shutdown-server.py >/dev/null <<'EOF'
+#!/usr/bin/env python3
+# /srv/shutdown-server.py
+# Listener for the dashboard "Power off" button.
+#   GET  /          -> health check (does nothing)
+#   POST /shutdown  -> cleanly powers off the Pi
+# Runs as root via systemd so it can actually halt the host.
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import subprocess, threading, time
+
+PORT = 8097
+
+def poweroff():
+    time.sleep(1)                      # let the reply reach the tablet first
+    subprocess.run(["systemctl", "poweroff"])
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self, code, body=b""):
+        self.send_response(code)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):     self.reply(200, b"shutdown-button: ok\n")
+    def do_OPTIONS(self): self.reply(204)
+
+    def do_POST(self):
+        if self.path.rstrip("/") == "/shutdown":
+            self.reply(200, b"Shutting down\n")
+            threading.Thread(target=poweroff, daemon=True).start()
+        else:
+            self.reply(404, b"not found\n")
+
+    def log_message(self, *a):         # stay quiet in the journal
+        pass
+
+ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+EOF
+```
+
+```bash
+sudo tee /etc/systemd/system/shutdown-server.service >/dev/null <<'EOF'
+[Unit]
+Description=Dashboard power-off button listener
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /srv/shutdown-server.py
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now shutdown-server.service
+```
+
+> Runs as root deliberately (only `systemctl poweroff` needs it) — the API has no auth of its own, which is fine since it's only reachable on the isolated RoadTrip AP.
+
+### 10.3 Homepage changes
+
+`/srv/homepage/index.html` gains:
+- A **Games** card (4th card, alongside Watch/Audiobooks/Music) linking to `/games/`.
+- A subtle, low-opacity **⏻ power button** in the top-left corner (`title="System Settings"`, opacity 0.25 until tapped/hovered) — deliberately unobtrusive so it isn't mashed by accident.
+- An **adult-verification gate**: tapping ⏻ opens a dialog with a randomly generated addition problem (two numbers 11–25); only a correct answer reveals the "Shut down" confirm button. Wrong answers show an inline error and reset the input; the dialog can be cancelled or dismissed by tapping outside it.
+- On confirm, it `POST`s to `http://<pi-ip>:8097/shutdown` and shows a "Shutting down… wait for the green light to stop blinking" message. If the shutdown-server is unreachable, it shows a fallback message instead of hanging.
+- The existing "open in native app, fall back to web" logic (`openMedia()`) for Jellyfin/Audiobookshelf/Navidrome cards is unchanged from Part 3/9.
+
+```bash
+nano /srv/homepage/index.html
+```
+see updated file in homepage/index.html
+
+### 10.4 Verify
+
+```bash
+curl -s http://192.168.4.1:8097/            # -> shutdown-button: ok
+systemctl status shutdown-server --no-pager
+```
+
+On a tablet joined to RoadTrip:
+1. Open `http://media.lan` → tap **Games** → hub loads with all 12 tiles.
+2. Tap **Car Bingo**, claim a player slot, mark a tile — reload on a second tablet and confirm the mark synced (shared state via `bingo-api.php`).
+3. Tap the faint ⏻ in the top-left → solve the addition prompt → **Shut down** → Pi's green activity LED should stop blinking within ~20 seconds.
+
+### Troubleshooting (Part 10)
+
+- **"Games" card 404s:** confirm files landed under `/srv/homepage/games/` (not `/srv/games/`) — the container only serves `/srv/homepage`.
+- **Bingo marks don't sync between tablets:** check `/srv/homepage/bingo` is owned by `33:33` (www-data) and writable; `bingo-api.php` returns an explicit `cannot open state file` error in its JSON if the mount is missing or read-only.
+- **Power button does nothing / "Couldn't reach the media box":** `systemctl status shutdown-server`, and confirm port 8097 isn't blocked — there's no firewall in this build, so this is almost always the service not running.
+- **Pi doesn't actually power off:** `shutdown-server` must run as **root** (`User=root` in the unit) — `systemctl poweroff` fails silently otherwise; check `journalctl -u shutdown-server`.
+
+---
+
 ## Troubleshooting
  
 - **Wi-Fi won't enable / no AP:** Wi-Fi country not set → `sudo raspi-config nonint do_wifi_country US`, reboot.
@@ -492,3 +840,6 @@ Notes:
 - [ ] Decide whether to clone the OS to a USB SSD for durability.
 - [ ] Optional: add a small RTC module if clock drift (no internet = no NTP) ever becomes annoying.
 - [ ] Note any Docker-repo or hostapd quirks encountered during the actual build here.
+- [ ] **Games backlog** (from `homepage/games/educational-games-build-plan.md`): `monster.html` (Feed Me!) is considered pointless and a candidate for replacement; `animals.html`'s sounds are inaccurate and need fixing or swapping for a different game; the games hub (`games/index.html`) is hand-maintained and not alphabetized — a longstanding ask is to auto-discover games and sort the hub alphabetically so new games don't require memorizing a grid position.
+- [ ] **Wave 2 educational games** (same build-plan doc): a fully scoped but unbuilt plan for ~18 additional games split into a Kindergarten wing and a 3rd-grade wing, plus shared infrastructure (player profiles, a star ledger, a parent page for spelling/word lists, and a `games/shared/arcade-api.php` generalizing the Bingo state pattern). Not started — build in phases per that doc when there's a session for it.
+- [ ] Confirm the default boot volume for the car-aux music player (set to 80 in `car-music-start.sh`); optionally expose MPD on `192.168.4.1:6600` for native MPD phone control (Part 9).
