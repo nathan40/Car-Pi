@@ -541,7 +541,7 @@ if [[ "$LAN_NAME" != "media.lan" ]]; then
 fi
 chown -R "$PUID:$PGID" /srv/homepage 2>/dev/null || true
 chown -R 33:33 /srv/config/arcade-state   # 33 = www-data inside php:8-apache (game shared state)
-ok "dashboard + $(find /srv/homepage/games -name '*.html' | wc -l) game files deployed (URLs use $LAN_NAME)"
+ok "dashboard + game files deployed (URLs use $LAN_NAME)"
 
 if [[ "$RESET_APPS" == "yes" ]]; then
     step "Resetting Jellyfin / Audiobookshelf / Navidrome"
