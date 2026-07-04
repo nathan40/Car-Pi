@@ -137,11 +137,11 @@ docker compose up -d
 docker compose ps      # all should be running
 ```
  
-While you still have internet, set each one up so it can fetch metadata:
+`setup.sh` auto-creates the admin/root account for all three via each app's first-run API (Jellyfin: user `admin` / password `carpi` — Jellyfin rejects a blank password; Audiobookshelf: user `root`, no password; Navidrome: user `admin`, no password). This is deliberately insecure — fine for a box that's offline and only reachable on its own isolated car Wi-Fi. While you still have internet, log in to each once so it can fetch metadata and you can add libraries:
  
-- **Jellyfin** → `http://<pi-url>:8096` — create admin, add libraries for `/data/movies` and `/data/tvshows`.
-- **Audiobookshelf** → `http://<pi-url>:13378` — create admin, add libraries for `/audiobooks` and `/podcasts`.
-- **Navidrome** → `http://<pi-url>:4533` — create admin; it auto-scans `/music`.
+- **Jellyfin** → `http://<pi-url>:8096` — log in, add libraries for `/data/movies` and `/data/tvshows`.
+- **Audiobookshelf** → `http://<pi-url>:13378` — log in, add libraries for `/audiobooks` and `/podcasts`.
+- **Navidrome** → `http://<pi-url>:4533` — log in; it auto-scans `/music`.
 `restart: unless-stopped` brings everything back on every power-up.
  
 ### 3.5 Optional kid-friendly homepage

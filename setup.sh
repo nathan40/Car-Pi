@@ -533,6 +533,70 @@ step "Media containers (pulls images — the long part)"
 (cd /srv && docker compose ps)
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
 
+step "Auto-creating admin accounts (no wizards to click through)"
+# No security concern here — this box is offline, in the car, on its own
+# Wi-Fi. Every account below uses a blank or throwaway password so nobody
+# has to type anything on a phone/tablet screen; each call is idempotent
+# so re-runs (update/reconfigure) just skip past the ones already done.
+
+wait_for_http() {                     # wait_for_http URL LABEL
+    local url="$1" label="$2" i
+    for ((i=0; i<60; i++)); do
+        curl -fsS -o /dev/null -m 3 "$url" && return 0
+        sleep 2
+    done
+    warn "$label did not come up in time — skipping its auto-admin step (create it by hand once)."
+    return 1
+}
+
+# --- Jellyfin: Startup/* wizard API. Blank passwords are rejected, so a
+# trivial fixed password is used; the user picker still needs one tap.
+if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin"; then
+    JF_DONE="$(curl -fsS -m 5 http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
+    if [[ -z "$JF_DONE" ]]; then
+        curl -fsS -X POST http://localhost:8096/Startup/Configuration \
+            -H "Content-Type: application/json" \
+            -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" >/dev/null
+        curl -fsS -X POST http://localhost:8096/Startup/User \
+            -H "Content-Type: application/json" \
+            -d '{"Name":"admin","Password":"carpi"}' >/dev/null
+        curl -fsS -X POST http://localhost:8096/Startup/RemoteAccess \
+            -H "Content-Type: application/json" \
+            -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null
+        curl -fsS -X POST http://localhost:8096/Startup/Complete >/dev/null
+        ok "Jellyfin admin created (user: admin, password: carpi) — add libraries once: /data/movies, /data/tvshows"
+    else
+        ok "Jellyfin already set up — left as-is"
+    fi
+fi
+
+# --- Audiobookshelf: /init accepts an empty password outright.
+if wait_for_http "http://localhost:13378/status" "Audiobookshelf"; then
+    ABS_INIT="$(curl -fsS -m 5 http://localhost:13378/status | grep -o '"isInit":true' || true)"
+    if [[ -z "$ABS_INIT" ]]; then
+        curl -fsS -X POST http://localhost:13378/init \
+            -H "Content-Type: application/json" \
+            -d '{"newRoot":{"username":"root","password":""}}' >/dev/null
+        ok "Audiobookshelf root created (user: root, no password) — add libraries once: /audiobooks, /podcasts"
+    else
+        ok "Audiobookshelf already set up — left as-is"
+    fi
+fi
+
+# --- Navidrome: no pre-check endpoint exists; POST and treat "already has
+# an admin" (403) as success-and-skip rather than an error.
+if wait_for_http "http://localhost:4533" "Navidrome"; then
+    ND_HTTP="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST http://localhost:4533/auth/createAdmin \
+        -H "Content-Type: application/json" -d '{"username":"admin","password":""}')"
+    if [[ "$ND_HTTP" == "200" ]]; then
+        ok "Navidrome admin created (user: admin, no password)"
+    elif [[ "$ND_HTTP" == "403" ]]; then
+        ok "Navidrome already set up — left as-is"
+    else
+        warn "Navidrome auto-admin call returned HTTP $ND_HTTP — create it by hand once if needed."
+    fi
+fi
+
 step "Offline Wi-Fi access point ($WLAN: SSID '$SSID', $BAND_DESC)"
 if command -v nmcli >/dev/null 2>&1; then
     tee /etc/NetworkManager/conf.d/99-unmanaged-wlan.conf >/dev/null <<EOF
@@ -760,13 +824,18 @@ ADMIN
   Restart apps:   cd /srv && docker compose restart
   Setup log:      $LOG_FILE
 
+LOGINS (auto-created — no setup wizards to click through)
+  Jellyfin ............ user: admin   password: carpi
+  Audiobookshelf ....... user: root    password: (none, just hit Enter)
+  Navidrome ............ user: admin   password: (none, just hit Enter)
+
 STILL TO DO (one-time, in a browser; do it over Ethernet while the
 Pi still has internet so metadata/artwork can download)
-  1. Jellyfin  http://$DEVICE_NAME.local:8096 -> create admin, add
-     libraries for /data/movies and /data/tvshows
-  2. Audiobookshelf  http://$DEVICE_NAME.local:13378 -> create admin,
-     add libraries for /audiobooks and /podcasts
-  3. Navidrome  http://$DEVICE_NAME.local:4533 -> create admin
+  1. Jellyfin  http://$DEVICE_NAME.local:8096 -> log in, add libraries
+     for /data/movies and /data/tvshows
+  2. Audiobookshelf  http://$DEVICE_NAME.local:13378 -> log in, add
+     libraries for /audiobooks and /podcasts
+  3. Navidrome  http://$DEVICE_NAME.local:4533 -> log in
      (it scans /music automatically)
   4. Copy media in (pre-encode video per guide Part 6):
        /srv/media/movies   /srv/media/tv   /srv/media/music
