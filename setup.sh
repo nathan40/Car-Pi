@@ -611,8 +611,13 @@ wait_for_jellyfin_core_startup() {
     for ((i=0; i<300; i++)); do
         code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://localhost:8096/Startup/Configuration 2>/dev/null || true)"
         case "$code" in
-            2[0-9][0-9]|401|403) return 0 ;;
+            2[0-9][0-9]|401|403)
+                info "  Jellyfin core startup done after ~$((i*2))s (GET /Startup/Configuration → HTTP $code)"
+                return 0 ;;
         esac
+        # Progress line every 30s so a stall is diagnosable from the log:
+        # 503 = bootstrap placeholder still up, 000 = no/refused connection.
+        (( i % 15 == 0 )) && info "  waiting for Jellyfin core startup — GET /Startup/Configuration → HTTP ${code:-000} (~$((i*2))s elapsed)"
         if docker logs --tail 200 jellyfin 2>&1 | grep -q "Failed to find valid ffmpeg"; then
             warn "Jellyfin can't find a valid ffmpeg — this is a known failure mode where"
             warn "its startup gate never completes. Check 'docker logs jellyfin' by hand."
@@ -623,6 +628,24 @@ wait_for_jellyfin_core_startup() {
     warn "Jellyfin's core startup didn't finish within 10 minutes — skipping its auto-admin"
     warn "step (create it by hand once). Check 'docker logs jellyfin' if this keeps happening."
     return 1
+}
+
+jf_diag() {
+    # Everything needed to diagnose a Jellyfin auto-setup failure from the
+    # setup log alone: container state, what :8096 actually answers on the
+    # endpoints the script uses, and the tail of the container's own log.
+    warn "---- Jellyfin diagnostics (report this whole block) ----"
+    warn "container: $(docker ps -a --filter name=jellyfin --format '{{.Names}}: {{.Status}} ({{.Image}})' 2>&1 | head -1)"
+    local url code body
+    for url in /System/Info/Public /Startup/Configuration /health; do
+        code="$(curl -s -o /tmp/jf_diag.body -w '%{http_code}' -m 5 "http://localhost:8096$url" 2>/tmp/jf_diag.err || true)"
+        body="$(head -c 300 /tmp/jf_diag.body 2>/dev/null | tr -d '\r\n')"
+        [[ -s /tmp/jf_diag.err ]] && body="$body [curl: $(head -c 200 /tmp/jf_diag.err | tr -d '\r\n')]"
+        warn "GET $url → HTTP ${code:-000}  ${body}"
+    done
+    warn "last 40 lines of 'docker logs jellyfin':"
+    docker logs --tail 40 jellyfin 2>&1 | sed 's/^/      | /' || true
+    warn "---- end Jellyfin diagnostics ----"
 }
 
 curl_retry() {                        # curl_retry [curl args...]
@@ -654,28 +677,41 @@ CARPI_PASS="carpi"
 # enough — Jellyfin's own bootstrap server answers it before /Startup/* is
 # actually usable (see wait_for_jellyfin_core_startup above), so both gates
 # are needed.
+jf_startup_post() {                   # jf_startup_post NAME [extra curl args...]
+    # Logs each wizard call by name so a failure in the chain below points at
+    # the exact /Startup/* endpoint (curl_retry prints the error itself).
+    local name="$1"; shift
+    info "  POST /Startup/$name"
+    curl_retry -X POST "http://localhost:8096/Startup/$name" "$@" >/dev/null
+}
 if wait_for_http "http://localhost:8096/System/Info/Public" "Jellyfin" && wait_for_jellyfin_core_startup; then
-    JF_DONE="$(curl_retry http://localhost:8096/System/Info/Public | grep -o '"StartupWizardCompleted":true' || true)"
+    JF_PUBLIC="$(curl_retry http://localhost:8096/System/Info/Public || true)"
+    info "  /System/Info/Public: ${JF_PUBLIC:-<no response>}"
+    JF_DONE="$(grep -o '"StartupWizardCompleted":true' <<< "$JF_PUBLIC" || true)"
     if [[ -z "$JF_DONE" ]]; then
-        if curl_retry -X POST http://localhost:8096/Startup/Configuration \
+        if jf_startup_post Configuration \
                 -H "Content-Type: application/json" \
-                -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" >/dev/null \
-            && curl_retry -X POST http://localhost:8096/Startup/User \
+                -d "{\"UICulture\":\"en-US\",\"MetadataCountryCode\":\"US\",\"PreferredMetadataLanguage\":\"en\"}" \
+            && jf_startup_post User \
                 -H "Content-Type: application/json" \
-                -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}" >/dev/null \
-            && curl_retry -X POST http://localhost:8096/Startup/RemoteAccess \
+                -d "{\"Name\":\"$CARPI_USER\",\"Password\":\"$CARPI_PASS\"}" \
+            && jf_startup_post RemoteAccess \
                 -H "Content-Type: application/json" \
-                -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' >/dev/null \
-            && curl_retry -X POST http://localhost:8096/Startup/Complete >/dev/null; then
+                -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' \
+            && jf_startup_post Complete; then
             ok "Jellyfin admin created (user: $CARPI_USER, password: $CARPI_PASS)"
         else
-            warn "Jellyfin auto-admin setup failed after retries — see error above."
-            warn "Create it by hand once at :8096, or just re-run setup.sh (each Startup/* call"
-            warn "above is safe to repeat — Jellyfin ignores ones already done)."
+            warn "Jellyfin auto-admin setup failed after retries — the last 'POST /Startup/...'"
+            warn "line above is the call that failed. Create it by hand once at :8096, or just"
+            warn "re-run setup.sh (each Startup/* call is safe to repeat — Jellyfin ignores"
+            warn "ones already done)."
+            jf_diag
         fi
     else
         ok "Jellyfin already set up — left as-is"
     fi
+else
+    jf_diag
 fi
 
 # --- Audiobookshelf: /init's "newRoot" only means "the first/root user" —
