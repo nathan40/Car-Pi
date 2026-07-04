@@ -554,14 +554,21 @@ fi
 
 step "Media containers (pulls images — the long part)"
 (cd /srv && docker compose pull)                       # grabs newer images on update runs
-(cd /srv && docker compose up -d --remove-orphans)     # recreates only what changed
 if [[ "$RESET_APPS" == "yes" ]]; then
-    # Deleting the bind-mounted config directories above doesn't change the
-    # container's own definition, so `up -d` just restarts the SAME container
-    # in place rather than making a new one — usually harmless (the app reads
-    # its state from that mount either way), but force a true recreate so a
-    # "reset" is unambiguously a clean slate, not a restart wearing a costume.
-    (cd /srv && docker compose up -d --force-recreate jellyfin audiobookshelf navidrome)
+    # Starting jellyfin normally here and then force-recreating it a step
+    # later briefly ran TWO instances back to back against the same emptied
+    # config dir: the plain `up -d` boots jellyfin against the fresh config,
+    # then the force-recreate below kills that instance and starts a third.
+    # If the first instance was mid-write on its initial SQLite migration
+    # (jellyfin.db/-wal) when killed, the next boot can find a torn database
+    # and hang forever on that migration — seen in practice as Jellyfin
+    # stuck at HTTP 503 on /Startup/Configuration indefinitely. Recreating
+    # jellyfin/audiobookshelf/navidrome directly, exactly once, avoids the
+    # extra boot-kill cycle against the just-emptied config.
+    (cd /srv && docker compose up -d --remove-orphans --force-recreate jellyfin audiobookshelf navidrome)
+    (cd /srv && docker compose up -d --remove-orphans)   # bring up anything else (e.g. homepage)
+else
+    (cd /srv && docker compose up -d --remove-orphans)   # recreates only what changed
 fi
 (cd /srv && docker compose ps)
 ok "jellyfin / audiobookshelf / navidrome / homepage are up"
